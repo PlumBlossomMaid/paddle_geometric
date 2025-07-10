@@ -11,8 +11,10 @@ def _orthogonal_matrix(dim: int) -> Tensor:
     return q.t()
 
 
-def orthogonal_matrix(num_rows: int, num_cols: int) -> Tensor:
-    r"""Generate an orthogonal matrix with `num_rows` rows and `num_cols` columns."""
+def orthogonal_matrix(num_rows: int, num_cols: int) -> paddle.Tensor:
+    """Generate an orthogonal matrix with `num_rows` rows
+    and `num_cols` columns.
+    """
     num_full_blocks = int(num_rows / num_cols)
     blocks = []
     for _ in range(num_full_blocks):
@@ -22,16 +24,29 @@ def orthogonal_matrix(num_rows: int, num_cols: int) -> Tensor:
     if remain_rows > 0:
         q = _orthogonal_matrix(num_cols)
         blocks.append(q[:remain_rows])
-    mat = paddle.concat(blocks, axis=0)
+    mat = paddle.concat(x=blocks)
     return mat
 
+def dim2perm(ndim, dim0, dim1):
+    perm = list(range(ndim))
+    perm[dim0], perm[dim1] = perm[dim1], perm[dim0]
+    return perm
 
-def linear_attention(q: Tensor, k: Tensor, v: Tensor) -> Tensor:
-    r"""Efficient attention mechanism from the `"Rethinking Attention with Performers" <https://arxiv.org/abs/2009.14794>`_ paper."""
-    D_inv = 1.0 / (q @ k.sum(axis=-2).unsqueeze(-1))
-    kv = paddle.matmul(k.transpose([0, 1, 3, 2]), v)
-    qkv = paddle.matmul(q, kv)
-    out = D_inv.squeeze(-1) * qkv
+def linear_attention(
+    q: paddle.Tensor, k: paddle.Tensor, v: paddle.Tensor
+) -> paddle.Tensor:
+    """Efficient attention mechanism from the
+    `"Rethinking Attention with Performers"
+    <https://arxiv.org/abs/2009.14794>`_ paper.
+
+    .. math::
+        \\mathbf{\\hat{D}}^{-1}(\\mathbf{Q}'((\\mathbf{K}')^{\\top} \\mathbf{V}))
+
+    """
+    D_inv = 1.0 / (q @ k.sum(axis=-2).unsqueeze(axis=-1))
+    kv = k.transpose(perm=dim2perm(k.ndim, -2, -1)) @ v
+    qkv = q @ kv
+    out = paddle.einsum("...L,...Ld->...Ld", D_inv.squeeze(axis=-1), qkv)
     return out
 
 
@@ -43,7 +58,7 @@ def generalized_kernel(
 ) -> Tensor:
     batch_size, num_heads = x.shape[:2]
     projection = mat.t().expand([batch_size, num_heads, -1, -1])
-    x = paddle.matmul(x, projection)
+    x = x @ projection
     out = kernel(x) + epsilon
     return out
 
@@ -58,6 +73,7 @@ class PerformerProjection(paddle.nn.Layer):
         self.num_cols = num_cols
         projection_matrix = orthogonal_matrix(self.num_rows, self.num_cols)
         self.register_buffer('projection_matrix', projection_matrix)
+        assert kernel is not None
         self.kernel = kernel
 
     def forward(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
@@ -66,9 +82,27 @@ class PerformerProjection(paddle.nn.Layer):
         out = linear_attention(q, k, v)
         return out
 
-
+# @finshed
 class PerformerAttention(paddle.nn.Layer):
-    r"""The linear scaled attention mechanism from the `"Rethinking Attention with Performers" <https://arxiv.org/abs/2009.14794>`_ paper.
+    """The linear scaled attention mechanism from the
+    `"Rethinking Attention with Performers"
+    <https://arxiv.org/abs/2009.14794>`_ paper.
+
+    Args:
+        channels (int): Size of each input sample.
+        heads (int, optional): Number of parallel attention heads.
+        head_channels (int, optional): Size of each attention head.
+            (default: :obj:`64.`)
+        kernel (Callable, optional): Kernels for generalized attention.
+            If not specified, `ReLU` kernel will be used.
+            (default: :obj:`torch.nn.ReLU()`)
+        qkv_bias (bool, optional): If specified, add bias to query, key
+            and value in the self attention. (default: :obj:`False`)
+        attn_out_bias (bool, optional): If specified, add bias to the
+            attention output. (default: :obj:`True`)
+        dropout (float, optional): Dropout probability of the final
+            attention output. (default: :obj:`0.0`)
+
     """
     def __init__(
         self,
@@ -97,15 +131,33 @@ class PerformerAttention(paddle.nn.Layer):
         self.attn_out = paddle.nn.Linear(inner_channels, channels, bias_attr=attn_out_bias)
         self.dropout = paddle.nn.Dropout(dropout)
 
-    def forward(self, x: Tensor, mask: Optional[Tensor] = None) -> Tensor:
-        B, N, *_ = x.shape
+    def forward(
+        self, x: paddle.Tensor, mask: Optional[paddle.Tensor] = None
+    ) -> paddle.Tensor:
+        """Forward pass.
+
+        Args:
+            x (torch.Tensor): Node feature tensor
+                :math:`\\mathbf{X} \\in \\mathbb{R}^{B \\times N \\times F}`, with
+                batch-size :math:`B`, (maximum) number of nodes :math:`N` for
+                each graph, and feature dimension :math:`F`.
+            mask (torch.Tensor, optional): Mask matrix
+                :math:`\\mathbf{M} \\in {\\{ 0, 1 \\}}^{B \\times N}` indicating
+                the valid nodes for each graph. (default: :obj:`None`)
+        """
+        B, N, *_ = tuple(x.shape)
         q, k, v = self.q(x), self.k(x), self.v(x)
-        q, k, v = [t.reshape([B, N, self.heads, self.head_channels]).transpose([0, 2, 1, 3]) for t in (q, k, v)]
+        q, k, v = map(
+            lambda t: t.reshape(B, N, self.heads, self.head_channels).transpose(
+                perm=[0, 2, 1, 3]
+            ),
+            (q, k, v),
+        )
         if mask is not None:
             mask = mask[:, None, :, None]
-            v = paddle.where(~mask, paddle.zeros_like(v), v)
+            v.masked_fill_(mask=~mask, value=0.0)
         out = self.fast_attn(q, k, v)
-        out = out.transpose([0, 2, 1, 3]).reshape([B, N, -1])
+        out = out.transpose(perm=[0, 2, 1, 3]).reshape([B, N, -1])
         out = self.attn_out(out)
         out = self.dropout(out)
         return out
@@ -115,13 +167,15 @@ class PerformerAttention(paddle.nn.Layer):
         num_rows = self.fast_attn.num_rows
         num_cols = self.fast_attn.num_cols
         projection_matrix = orthogonal_matrix(num_rows, num_cols)
-        self.fast_attn.projection_matrix.set_value(projection_matrix)
+        paddle.assign(projection_matrix, output=self.fast_attn.projection_matrix)
+        del projection_matrix
 
     def _reset_parameters(self):
-        self.q.weight.set_value(paddle.nn.initializer.KaimingUniform())
-        self.k.weight.set_value(paddle.nn.initializer.KaimingUniform())
-        self.v.weight.set_value(paddle.nn.initializer.KaimingUniform())
-        self.attn_out.weight.set_value(paddle.nn.initializer.KaimingUniform())
+        # pass
+        # self.q.weight.set_value(paddle.nn.initializer.KaimingUniform())
+        # self.k.weight.set_value(paddle.nn.initializer.KaimingUniform())
+        # self.v.weight.set_value(paddle.nn.initializer.KaimingUniform())
+        # self.attn_out.weight.set_value(paddle.nn.initializer.KaimingUniform())
         self.redraw_projection_matrix()
 
     def __repr__(self) -> str:
