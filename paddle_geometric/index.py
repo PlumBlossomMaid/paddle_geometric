@@ -45,6 +45,47 @@ def index2ptr(index: Tensor, size: Optional[int] = None) -> Tensor:
 
 
 
+def index2ptr(index: Tensor, size: Optional[int] = None) -> Tensor:
+    """
+    Convert a 1D index tensor (row indices in COO) to CSR indptr.
+    Args:
+        index (Tensor): 1D integer tensor of indices.
+        size (Optional[int]): number of rows (dim_size). If None, inferred as max(index)+1 or 0.
+    Returns:
+        Tensor: indptr of shape [size + 1], dtype int32 if index.dtype != int64 else int64.
+    """
+    # validations (reuse the helpers you have)
+    assert_valid_dtype(index)
+    assert_one_dimensional(index)
+    assert_contiguous(index)
+
+    # infer size if needed
+    if size is None:
+        size = int(index.max()) + 1 if index.numel() > 0 else 0
+
+    out_dtype = paddle.int64 if index.dtype == paddle.int64 else paddle.int32
+
+    # special cases
+    if size == 0:
+        # empty dimension -> single zero entry
+        return paddle.zeros(shape=(1,), dtype=out_dtype)
+    if index.numel() == 0:
+        # no entries -> zeros of length size+1
+        return paddle.zeros(shape=(size + 1,), dtype=out_dtype)
+
+    # ensure no negative indices
+    if (index < 0).any():
+        raise ValueError("'index' contains negative values")
+
+    # bincount to get counts per row; ensure we use int64 for bincount input
+    counts = paddle.bincount(index.astype('int64'), minlength=size)
+    counts = counts.astype(out_dtype)
+    # prefix-sum: indptr[0] = 0, indptr[i+1] = sum(counts[:i+1])
+    indptr = paddle.concat([paddle.zeros((1,), dtype=out_dtype),
+                            counts.cumsum(axis=0, dtype=out_dtype)], axis=0)
+
+    return indptr
+
 class CatMetadata(NamedTuple):
     nnz: List[int]
     dim_size: List[Optional[int]]
@@ -153,6 +194,7 @@ class Index(Tensor):
     def _data(self) -> Tensor:
         return self.data
 
+    # Validation ##############################################################
     def validate(self) -> 'Index':
         r"""Validates the `Index` representation."""
         assert_valid_dtype(self._data)
@@ -174,6 +216,8 @@ class Index(Tensor):
 
         return self
 
+    # Properties ##############################################################
+
     @property
     def dim_size(self) -> Optional[int]:
         return self._dim_size
@@ -184,7 +228,9 @@ class Index(Tensor):
     @property
     def dtype(self) -> paddle.dtype:
         return self._data.dtype
-    
+
+    # Cache Interface #########################################################
+
     def get_dim_size(self) -> int:
         if self._dim_size is None:
             self._dim_size = int(self._data.max()) + 1 if self.numel() > 0 else 0
@@ -206,7 +252,7 @@ class Index(Tensor):
                     fill_value=self._indptr[-1],
                     dtype=self._indptr.dtype,
                 )
-                self._indptr = paddle.concat([self._indptr, fill_value], dim=0)
+                self._indptr = paddle.concat([self._indptr, fill_value], axis=0)
 
         self._dim_size = dim_size
 
@@ -228,6 +274,25 @@ class Index(Tensor):
         if self.is_sorted:
             self.get_indptr()
         return self
+
+    # Methods #################################################################
+
+    def to_dict(self):
+        return {
+            'data': self._data,
+            'dim_size': self.dim_size,
+            'is_sorted': self.is_sorted,
+            '_indptr': self._indptr
+        }
+    @classmethod
+    def from_dict(cls, data_dict) -> 'Index':
+        r"""Creates a new :class:`Index` instance from a dictionary."""
+        out = cls(data_dict['data'],
+                  dim_size=data_dict['dim_size'],
+                  is_sorted=data_dict['is_sorted']
+        )
+        out._indptr = data_dict.get('_indptr', None)
+        return out
 
     def share_memory_(self) -> 'Index':
         """"""  # noqa: D419
@@ -274,6 +339,21 @@ class Index(Tensor):
         return f"{prefix}{tensor_str}, {', '.join(suffixes)})"
     def __str__(self) -> str:
         return self.__repr__()
+    
+    def _shallow_copy(self) -> 'Index':
+        out = Index(self._data)
+        out._dim_size = self._dim_size
+        out._is_sorted = self._is_sorted
+        out._indptr = self._indptr
+        out._cat_metadata = self._cat_metadata
+        return out
+
+    def _clear_metadata(self) -> 'Index':
+        self._dim_size = None
+        self._is_sorted = False
+        self._indptr = None
+        self._cat_metadata = None
+        return self
 
     def clone(self):
         index = Index(self._data.clone(), dim_size=self.dim_size, is_sorted=self.is_sorted)
@@ -316,38 +396,159 @@ class Index(Tensor):
             out = Index(out)
             out._dim_size = self.dim_size
         return out
-    
-    def __getitem__(self, indices):
 
-
-        data = self.data[indices]
-
-        if data.dim() != 1:
+    def to(self, *args, **kwargs):
+        data = self.data.to(*args, **kwargs)
+        if data.dtype not in pyg_typing.INDEX_DTYPES:
             return data
+        
+        if self.data.data_ptr() != data.data_ptr():
+            out = Index(data)
+        else:  # In-place:
+            self.data = data
+            out = self
+        
+        # Copy metadata:
+        out._dim_size = self._dim_size
+        out._is_sorted = self._is_sorted
+        out._cat_metadata = self._cat_metadata
 
-        assert len(indices) == 1
-        index = indices[0]
-        assert index is not None
-
-        out = Index(data)
-
-        if index.dtype in (paddle.bool, paddle.uint8):  # 1. `index[mask]`.
-            out._dim_size = self.dim_size
-            out._is_sorted = self.is_sorted
-
-        else:  # 2. `index[index]`.
-            out._dim_size = self.dim_size
+        # Convert cache:
+        if self._indptr is not None:
+            out._indptr = self._indptr.to(*args, **kwargs)
 
         return out
+    
+    def long(self):
+        return self.to(dtype=paddle.int64)
+    def int(self):
+        return self.to(dtype=paddle.int32)
+    
+    @paddle.utils.decorator_utils.param_one_alias(['axis', 'dim'])
+    def sort(self, axis=-1, descending=False, stable=False):
+        if self.is_sorted and not descending:
+            return self, paddle.arange(self.data.numel(), device=self.data.place)
+        
+        data = paddle.sort(x=self._data, axis=axis, descending=descending, stable=stable)
+        perm = paddle.argsort(x=self._data, axis=axis, descending=descending, stable=stable)
+
+        out = Index(data)
+        out._dim_size = self._dim_size
+
+        if not descending:
+            out._is_sorted = True
+        return out, perm
+    
+    def narrow(self, dim: int, start, length):
+
+        end = start + length
+
+        if start <= 0 and end > self.data.shape[dim]:
+            return self._shallow_copy()
+        
+        data = paddle.slice(self.data, axes=[dim], starts=[start], ends=[end])
+        out = Index(data)
+        out._dim_size = self._dim_size
+        out._is_sorted = self._is_sorted
+        return out
+    
+    def __getitem__(self, indices):
+        if isinstance(indices, slice):
+            data = self.data[indices]
+            if indices.step is not None and indices.step != 1:
+                data = data.contiguous()
+
+            out = Index(data)
+            out._dim_size = self.dim_size
+            if indices.step is None or indices.step >= 0:
+                out._is_sorted = self.is_sorted
+            
+            return out
+        elif indices is Ellipsis:
+            return self._shallow_copy()
+        elif isinstance(indices, paddle.Tensor):
+            data = self.data[indices]
+            if data.dim() != 1:
+                return data
+            out = Index(data)
+            if indices.dtype in (paddle.bool, paddle.uint8):  # 1. `index[mask]`.
+                out._dim_size = self.dim_size
+                out._is_sorted = self.is_sorted
+
+            else:  # 2. `index[index]`.
+                out._dim_size = self.dim_size
+
+            return out
+        elif isinstance(indices, tuple) and Ellipsis in indices:
+            data = self.data[indices]
+            if data.dim() != 1:
+                return data
+            slice_indice = None
+            for indice in indices:
+                if indice is Ellipsis:
+                    continue
+                slice_indice = indice
+                break
+            assert slice_indice is not None
+
+            if slice_indice.step is not None and slice_indice.step != 1:
+                data = data.contiguous()
+
+            out = Index(data)
+            out._dim_size = self.dim_size
+            if slice_indice.step is None or slice_indice.step >= 0:
+                out._is_sorted = self.is_sorted
+            
+            return out
+        elif isinstance(indices, tuple) and None in indices:
+            data = self.data[indices]
+            if data.dim() != 1:
+                return data
+            slice_indice = None
+            for indice in indices:
+                if indice is None:
+                    continue
+                slice_indice = indice
+                break
+            assert slice_indice is not None
+
+            if slice_indice.step is not None and slice_indice.step != 1:
+                data = data.contiguous()
+
+            out = Index(data)
+            out._dim_size = self.dim_size
+            if slice_indice.step is None or slice_indice.step >= 0:
+                out._is_sorted = self.is_sorted
+            
+            return out
+        elif isinstance(indices, int):
+            return self._data[indices]
+        else:
+            raise TypeError(f"Invalid indexing method {type(indices)}")
+
+    def __add__(self, other):
+        return paddle.add(self, other)
+
+    def __radd__(self, other):
+        return paddle.add(other, self)
+
+    def __sub__(self, other): 
+        return paddle.subtract(self, other)
+    def __rsub__(self, other): 
+        return paddle.subtract(other, self)
+
 
     def __array_function__(self, func, types, args, kwargs):
         if func not in HANDLED_FUNCTIONS:
             return NotImplemented
-        if not all(issubclass(t, Tensor) for t in types):
+        
+        if func in [paddle.concat]:
+            if not all(issubclass(t, Tensor) for t in types):
+                return NotImplemented
+
+        if not any(issubclass(t, Tensor) for t in types):
             return NotImplemented
         return HANDLED_FUNCTIONS[func](*args, **kwargs)
-
-
 
 
 def get_overloaded_types_and_args(relevant_args):
@@ -449,9 +650,16 @@ def _concatenate_dispatcher(x, axis=None, name=None):
         yield array
 setattr(paddle, 'concat', array_function_dispatch(_concatenate_dispatcher)(paddle.concat))
 
-def _slice_dispatcher(input, axes, starts, ends):
-    return (input, )
-setattr(paddle, 'slice', array_function_dispatch(_slice_dispatcher)(paddle.slice))
+def _binary_dispatcher(x, y, **kwargs):
+    return (x, y)
+setattr(paddle, 'add', array_function_dispatch(_binary_dispatcher)(paddle.add))
+
+
+setattr(paddle, 'subtract', array_function_dispatch(_binary_dispatcher)(paddle.subtract))
+
+# def _slice_dispatcher(input, axes, starts, ends):
+#     return (input, )
+# setattr(paddle, 'slice', array_function_dispatch(_slice_dispatcher)(paddle.slice))
 
 
 
@@ -493,21 +701,96 @@ def concat(x, axis=0, name=None):
         is_sorted=is_sorted_list,
     )
     return out
+
+
+@implements(paddle.add)
+def add(x, y, **kwargs):
+    # 提取底层 Tensor
+    x_data = x.data if isinstance(x, Index) else x
+    y_data = y.data if isinstance(y, Index) else y
+
+    alpha = kwargs.get('alpha', 1)
+    y_data = y_data * alpha
+
+    # 调用 Paddle 的原始加法
+    out_data = x_data + y_data
+    if out_data.dtype not in pyg_typing.INDEX_DTYPES:
+        return out_data
     
+    if out_data.dim() != 1:
+        return out_data
     
-@implements(paddle.slice)
-def slice(input, axes, starts, ends):
+    out = Index(out_data)
+    if isinstance(x, Tensor) and x.numel() <= 1:
+        x = int(x)
 
-    data = input.data
-    data = paddle.slice(data, axes, starts, ends)
-    data = data.contiguous()
+    if isinstance(y, Tensor) and y.numel() <= 1:
+        y = int(y)
 
-    out = Index(data)
-    out._dim_size = input.dim_size
-    # NOTE We could potentially maintain the `indptr` attribute here,
-    # but it is not really clear if this is worth it. The most important
-    # information `is_sorted` needs to be maintained though:
-    # if step >= 0:
-    out._is_sorted = input.is_sorted
+    if isinstance(y, int):
+        assert isinstance(x, Index)
+        if x.dim_size is not None:
+            out._dim_size = x.dim_size + alpha * y
+        out._is_sorted = x.is_sorted
+    elif isinstance(x, int):
+        assert isinstance(y, Index)
+        if y.dim_size is not None:
+            out._dim_size = x + alpha * y.dim_size
+        out._is_sorted = y.is_sorted
 
+    elif isinstance(x, Index) and isinstance(y, Index):
+        if x.dim_size is not None and y.dim_size is not None:
+            out._dim_size = x.dim_size + alpha * y.dim_size
     return out
+
+
+
+
+@implements(paddle.subtract)
+def subtract(x, y, **kwargs):
+    # 提取底层 Tensor
+    x_data = x.data if isinstance(x, Index) else x
+    y_data = y.data if isinstance(y, Index) else y
+
+    alpha = kwargs.get('alpha', 1)
+    y_data = y_data * alpha
+
+    # 调用 Paddle 的原始加法
+    out_data = x_data - y_data
+    if out_data.dtype not in pyg_typing.INDEX_DTYPES:
+        return out_data
+    
+    if out_data.dim() != 1:
+        return out_data
+    
+    out = Index(out_data)
+    if not isinstance(x, Tensor):
+        return out
+
+    if isinstance(y, Tensor) and y.numel() <= 1:
+        y = int(y)
+
+    if isinstance(y, int):
+        assert isinstance(x, Index)
+        if x.dim_size is not None:
+            out._dim_size = x.dim_size - alpha * y
+        out._is_sorted = x.is_sorted
+    return out
+
+    
+# @implements(paddle.slice)
+# def slice(input, axes, starts, ends):
+
+#     data = input.data
+#     data = paddle.slice(data, axes, starts, ends)
+#     data = data.contiguous()
+
+#     out = Index(data)
+#     out._dim_size = input.dim_size
+#     # NOTE We could potentially maintain the `indptr` attribute here,
+#     # but it is not really clear if this is worth it. The most important
+#     # information `is_sorted` needs to be maintained though:
+#     # if step >= 0:
+#     out._is_sorted = input.is_sorted
+
+#     return out

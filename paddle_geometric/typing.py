@@ -13,6 +13,7 @@ WITH_PADDLE_DEV = True
 
 WITH_PP30 = int(paddle.__version__.split(sep=".")[0]) >= 3
 WITH_PP31 = WITH_PP30 and int(paddle.__version__.split(sep=".")[1]) >= 1
+WITH_PP32 = WITH_PP30 and int(paddle.__version__.split(sep=".")[1]) >= 2
 
 
 WITH_WINDOWS = os.name == 'nt'
@@ -66,9 +67,9 @@ except Exception as e:
     WITH_WEIGHTED_NEIGHBOR_SAMPLE = False
 
 try:
-    raise ImportError
-    # import paddle_scatter  # noqa
-    # WITH_PADDLE_SCATTER = True
+    # raise ImportError
+    import paddle_scatter  # noqa
+    WITH_PADDLE_SCATTER = True
 except Exception as e:
     if not isinstance(e, ImportError):  # pragma: no cover
         warnings.warn(f"An issue occurred while importing 'paddle-scatter'. "
