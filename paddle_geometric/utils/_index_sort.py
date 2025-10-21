@@ -1,7 +1,10 @@
 from typing import Optional, Tuple
 
 import paddle
-from paddle import Tensor
+
+import paddle_geometric.typing
+from paddle_geometric import is_compiling
+from paddle_geometric.typing import pyg_lib
 
 
 def index_sort(
@@ -24,14 +27,8 @@ def index_sort(
             guarantees that the order of equivalent elements is preserved.
             (default: :obj:`False`)
     """
-    if stable:
-        # Perform stable sort if requested
-        indices = paddle.argsort(inputs, axis=0, descending=False, stable=True)
-        sorted_inputs = paddle.gather(inputs, indices)
-    else:
-        # Perform regular sort
-        indices = paddle.argsort(inputs, axis=0, descending=False)
-        sorted_inputs = paddle.gather(inputs, indices)
+    if stable or not paddle_geometric.typing.WITH_INDEX_SORT or is_compiling():
+        return paddle.sort(stable=stable,
+                           x=inputs), paddle.argsort(stable=stable, x=inputs)
 
-    return sorted_inputs, indices
-
+    return pyg_lib.ops.index_sort(inputs, max_value=max_value)
