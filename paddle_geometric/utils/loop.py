@@ -1,5 +1,4 @@
-import typing
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, overload
 
 import paddle
 from paddle import Tensor
@@ -12,10 +11,6 @@ from paddle_geometric.utils.sparse import (
     to_paddle_coo_tensor,
     to_paddle_csr_tensor,
 )
-
-
-from typing import overload
-
 
 
 def contains_self_loops(edge_index: Tensor) -> bool:
@@ -71,13 +66,36 @@ def remove_self_loops(  # noqa: F811
     """
     size: Optional[Tuple[int, int]] = None
 
+    layout = None  # 'coo', 'csr'
+
     value: Optional[Tensor] = None
     if is_paddle_sparse_tensor(edge_index):
         size = (edge_index.shape[0], edge_index.shape[1])
         edge_index, value = to_edge_index(edge_index)
 
+    is_undirected = False
+    if isinstance(edge_index, EdgeIndex):
+        is_undirected = edge_index.is_undirected
+
     mask = edge_index[0] != edge_index[1]
     edge_index = edge_index[:, mask]
+
+    if isinstance(edge_index, EdgeIndex):
+        edge_index._is_undirected = is_undirected
+
+    # if edge_attr is None:
+    #     return edge_index, None
+    # else:
+    #     return edge_index, edge_attr[mask]
+    if layout is not None:
+        assert edge_attr is None
+        assert value is not None
+        value = value[mask]
+        if str(layout) == 'coo':  # str(...) for TorchScript :(
+            return to_paddle_coo_tensor(edge_index, value, size, True), None
+        elif str(layout) == 'csr':
+            return to_paddle_csr_tensor(edge_index, value, size, True), None
+        raise ValueError(f"Unexpected sparse tensor layout (got '{layout}')")
 
     if edge_attr is None:
         return edge_index, None
@@ -126,12 +144,23 @@ def segregate_self_loops(  # noqa: F811
     mask = edge_index[0] != edge_index[1]
     inv_mask = ~mask
 
+    is_undirected = False
+    if isinstance(edge_index, EdgeIndex):
+        is_undirected = edge_index.is_undirected
+
     loop_edge_index = edge_index[:, inv_mask]
     loop_edge_attr = None if edge_attr is None else edge_attr[inv_mask]
     edge_index = edge_index[:, mask]
     edge_attr = None if edge_attr is None else edge_attr[mask]
 
+    if isinstance(edge_index, EdgeIndex):
+        assert isinstance(loop_edge_index, EdgeIndex)
+        edge_index._is_undirected = is_undirected
+        loop_edge_index._is_undirected = is_undirected
+
     return edge_index, edge_attr, loop_edge_index, loop_edge_attr
+
+
 @overload
 def add_self_loops(
     edge_index: Tensor,
@@ -141,6 +170,7 @@ def add_self_loops(
 ) -> Tuple[Tensor, None]:
     pass
 
+
 @overload
 def add_self_loops(  # noqa: F811
     edge_index: Tensor,
@@ -150,6 +180,7 @@ def add_self_loops(  # noqa: F811
 ) -> Tuple[Tensor, None]:
     pass
 
+
 @overload
 def add_self_loops(  # noqa: F811
     edge_index: Tensor,
@@ -158,6 +189,7 @@ def add_self_loops(  # noqa: F811
     num_nodes: Optional[int] = None,
 ) -> Tuple[Tensor, None]:
     pass
+
 
 @overload
 def add_self_loops(  # noqa: F811
@@ -168,6 +200,7 @@ def add_self_loops(  # noqa: F811
 ) -> Tuple[Tensor, None]:
     pass
 
+
 @overload
 def add_self_loops(  # noqa: F811
     edge_index: Tensor,
@@ -177,6 +210,7 @@ def add_self_loops(  # noqa: F811
 ) -> Tuple[Tensor, None]:
     pass
 
+
 @overload
 def add_self_loops(  # noqa: F811
     edge_index: Tensor,
@@ -185,6 +219,7 @@ def add_self_loops(  # noqa: F811
     num_nodes: Optional[Tuple[int, int]] = None,
 ) -> Tuple[Tensor, None]:
     pass
+
 
 @overload
 def add_self_loops(  # noqa: F811
@@ -195,6 +230,7 @@ def add_self_loops(  # noqa: F811
 ) -> Tuple[Tensor, Tensor]:
     pass
 
+
 @overload
 def add_self_loops(  # noqa: F811
     edge_index: Tensor,
@@ -204,6 +240,7 @@ def add_self_loops(  # noqa: F811
 ) -> Tuple[Tensor, Tensor]:
     pass
 
+
 @overload
 def add_self_loops(  # noqa: F811
     edge_index: Tensor,
@@ -213,9 +250,6 @@ def add_self_loops(  # noqa: F811
 ) -> Tuple[Tensor, Tensor]:
     pass
 
-from typing import Optional, Tuple, Union
-import paddle
-from paddle import Tensor
 
 @overload
 def add_self_loops(  # noqa: F811
@@ -226,6 +260,7 @@ def add_self_loops(  # noqa: F811
 ) -> Tuple[Tensor, Tensor]:
     pass
 
+
 @overload
 def add_self_loops(  # noqa: F811
     edge_index: Tensor,
@@ -235,6 +270,7 @@ def add_self_loops(  # noqa: F811
 ) -> Tuple[Tensor, Tensor]:
     pass
 
+
 @overload
 def add_self_loops(  # noqa: F811
     edge_index: Tensor,
@@ -243,6 +279,7 @@ def add_self_loops(  # noqa: F811
     num_nodes: Optional[Tuple[int, int]] = None,
 ) -> Tuple[Tensor, Tensor]:
     pass
+
 
 @overload
 def add_self_loops(  # noqa: F811
@@ -253,6 +290,7 @@ def add_self_loops(  # noqa: F811
 ) -> Tuple[Tensor, Optional[Tensor]]:
     pass
 
+
 @overload
 def add_self_loops(  # noqa: F811
     edge_index: Tensor,
@@ -262,6 +300,7 @@ def add_self_loops(  # noqa: F811
 ) -> Tuple[Tensor, Optional[Tensor]]:
     pass
 
+
 @overload
 def add_self_loops(  # noqa: F811
     edge_index: Tensor,
@@ -270,6 +309,7 @@ def add_self_loops(  # noqa: F811
     num_nodes: Optional[int] = None,
 ) -> Tuple[Tensor, Optional[Tensor]]:
     pass
+
 
 @overload
 def add_self_loops(  # noqa: F811
@@ -280,6 +320,7 @@ def add_self_loops(  # noqa: F811
 ) -> Tuple[Tensor, Optional[Tensor]]:
     pass
 
+
 @overload
 def add_self_loops(  # noqa: F811
     edge_index: Tensor,
@@ -289,6 +330,7 @@ def add_self_loops(  # noqa: F811
 ) -> Tuple[Tensor, Optional[Tensor]]:
     pass
 
+
 @overload
 def add_self_loops(  # noqa: F811
     edge_index: Tensor,
@@ -297,6 +339,8 @@ def add_self_loops(  # noqa: F811
     num_nodes: Optional[Tuple[int, int]] = None,
 ) -> Tuple[Tensor, Optional[Tensor]]:
     pass
+
+
 def add_self_loops(
     edge_index: Tensor,
     edge_attr: Optional[Tensor] = None,
@@ -342,7 +386,8 @@ def add_self_loops(
 
     device = edge_index.place
 
-    loop_index = paddle.arange(0, N, dtype=edge_index.dtype).reshape([1, -1])
+    loop_index = paddle.arange(0, N, dtype=edge_index.dtype,
+                               device=device).reshape([1, -1])
     loop_index = paddle.concat([loop_index, loop_index], axis=0)
 
     full_edge_index = paddle.concat([edge_index, loop_index], axis=1)
@@ -383,6 +428,8 @@ def add_self_loops(
         edge_attr = paddle.concat([edge_attr, loop_attr], axis=0)
 
     return full_edge_index, edge_attr
+
+
 @overload
 def add_remaining_self_loops(
     edge_index: Tensor,
@@ -479,8 +526,7 @@ def add_remaining_self_loops(  # noqa: F811
     fill_value: Optional[Union[float, Tensor, str]] = None,
     num_nodes: Optional[int] = None,
 ) -> Tuple[Tensor, Optional[Tensor]]:
-    r"""
-    Adds remaining self-loops :math:`(i, i) \in \mathcal{E}` to every node
+    r"""Adds remaining self-loops :math:`(i, i) \in \mathcal{E}` to every node
     :math:`i \in \mathcal{V}` in the graph given by :attr:`edge_index`.
     In case the graph is weighted or has multi-dimensional edge features
     (:obj:`edge_attr != None`), edge features of non-existing self-loops will
@@ -511,7 +557,7 @@ def add_remaining_self_loops(  # noqa: F811
 
     if not paddle.in_dynamic_mode() and isinstance(edge_index, EdgeIndex):
         loop_index: Tensor = EdgeIndex(
-            paddle.arange(0, N).view([1, -1]).tile((2, 1)),
+            paddle.arange(0, N).view([1, -1]).tile((2, 1), device=device),
             sparse_size=(N, N),
             is_undirected=True,
         )
@@ -541,13 +587,13 @@ def add_remaining_self_loops(  # noqa: F811
 
     return edge_index, edge_attr
 
+
 def get_self_loop_attr(
     edge_index: Tensor,
     edge_attr: Optional[Tensor] = None,
     num_nodes: Optional[int] = None,
 ) -> Tensor:
-    r"""
-    Returns the edge features or weights of self-loops
+    r"""Returns the edge features or weights of self-loops
     :math:`(i, i)` of every node :math:`i \in \mathcal{V}` in the
     graph given by :attr:`edge_index`. Edge features of missing self-loops not
     present in :attr:`edge_index` will be filled with zeros. If
@@ -581,8 +627,10 @@ def get_self_loop_attr(
     else:  # A vector of ones:
         loop_attr = paddle.ones(loop_index.shape[0], dtype=edge_index.dtype)
 
-    num_nodes = num_nodes if num_nodes is not None else int(paddle.max(edge_index) + 1)
-    full_loop_attr = paddle.zeros((num_nodes, ) + loop_attr.shape[1:], dtype=loop_attr.dtype)
+    num_nodes = num_nodes if num_nodes is not None else int(
+        paddle.max(edge_index) + 1)
+    full_loop_attr = paddle.zeros((num_nodes, ) + loop_attr.shape[1:],
+                                  dtype=loop_attr.dtype)
     full_loop_attr[loop_index] = loop_attr
 
     return full_loop_attr
@@ -621,61 +669,6 @@ def compute_loop_attr(  # noqa: F811
     pass
 
 
-def compute_loop_attr(  # noqa: F811
-    edge_index: Tensor,
-    edge_attr: Tensor,
-    num_nodes: int,
-    is_sparse: bool,
-    fill_value: Optional[Union[float, Tensor, str]] = None,
-) -> Tensor:
-    r"""
-    Computes the attributes of self-loops in the graph given by `edge_index` and
-    `edge_attr`. Missing self-loops will be added according to `fill_value`.
-
-    Args:
-        edge_index (Tensor): The edge indices.
-        edge_attr (Tensor): The edge weights or multi-dimensional edge features.
-        num_nodes (int): The number of nodes.
-        is_sparse (bool): Whether the graph is sparse.
-        fill_value (float, Tensor or str, optional): How to compute self-loop
-            attributes for missing self-loops. Defaults to 1.0 or as specified.
-
-    Returns:
-        Tensor: The computed self-loop attributes.
-    """
-    if fill_value is None:
-        fill_value = 1.0
-
-    if isinstance(fill_value, (float, int)):
-        loop_attr = paddle.full([num_nodes] + list(edge_attr.shape[1:]), fill_value, dtype=edge_attr.dtype)
-    elif isinstance(fill_value, str):
-        if fill_value == "add":
-            loop_attr = paddle.zeros([num_nodes] + list(edge_attr.shape[1:]), dtype=edge_attr.dtype)
-            scatter_add = paddle.scatter_add(
-                paddle.zeros_like(loop_attr), edge_index[0], edge_attr, overwrite=False
-            )
-            loop_attr += scatter_add
-        elif fill_value == "mean":
-            counts = paddle.scatter(
-                paddle.zeros([num_nodes], dtype="int32"),
-                edge_index[0],
-                paddle.ones([edge_attr.shape[0]], dtype="int32"),
-                overwrite=False,
-            )
-            scatter_sum = paddle.scatter_add(
-                paddle.zeros_like(loop_attr),
-                edge_index[0],
-                edge_attr,
-                overwrite=False,
-            )
-            loop_attr = scatter_sum / (counts.reshape([-1, 1]) + 1e-9)
-        else:
-            raise ValueError(f"Unsupported fill_value '{fill_value}'")
-    else:
-        raise ValueError("Invalid fill_value type")
-
-    return loop_attr
-
 def compute_loop_attr(
     edge_index: Tensor,
     edge_attr: Tensor,
@@ -683,8 +676,7 @@ def compute_loop_attr(
     is_sparse: bool,
     fill_value: Optional[Union[float, Tensor, str]] = None,
 ) -> Tensor:
-    """
-    Computes the attributes of self-loops in the graph given by `edge_index` and
+    """Computes the attributes of self-loops in the graph given by `edge_index` and
     `edge_attr`. Missing self-loops will be added according to `fill_value`.
 
     Args:
@@ -717,7 +709,8 @@ def compute_loop_attr(
         col = edge_index[0] if is_sparse else edge_index[1]
         if fill_value == "add":
             return paddle.scatter(
-                paddle.zeros([num_nodes] + list(edge_attr.shape[1:]), dtype=edge_attr.dtype),
+                paddle.zeros([num_nodes] + list(edge_attr.shape[1:]),
+                             dtype=edge_attr.dtype),
                 col,
                 edge_attr,
                 overwrite=False,
@@ -730,12 +723,14 @@ def compute_loop_attr(
                 overwrite=False,
             )
             scatter_sum = paddle.scatter_add(
-                paddle.zeros([num_nodes] + list(edge_attr.shape[1:]), dtype=edge_attr.dtype),
+                paddle.zeros([num_nodes] + list(edge_attr.shape[1:]),
+                             dtype=edge_attr.dtype),
                 col,
                 edge_attr,
                 overwrite=False,
             )
-            return scatter_sum / (counts.unsqueeze(-1).astype(edge_attr.dtype) + 1e-9)
+            return scatter_sum / (
+                counts.unsqueeze(-1).astype(edge_attr.dtype) + 1e-9)
         else:
             raise ValueError(f"Unsupported fill_value '{fill_value}'")
 
