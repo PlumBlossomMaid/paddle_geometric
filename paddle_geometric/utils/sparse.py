@@ -191,7 +191,9 @@ def to_paddle_coo_tensor(
         # Expanded tensors are not yet supported in all Pypaddle code paths :(
         # edge_attr = paddle.ones(1, device=edge_index.device)
         # edge_attr = edge_attr.expand(edge_index.size(1))
-        edge_attr = paddle.ones(edge_index.shape[1], device=edge_index.place)
+        edge_attr = paddle.ones([
+            edge_index.shape[1],
+        ], device=edge_index.place)
 
     out = paddle.sparse.sparse_coo_tensor(
         indices=edge_index,
@@ -258,10 +260,17 @@ def to_paddle_csr_tensor(
         # Expanded tensors are not yet supported in all Pypaddle code paths :(
         # edge_attr = paddle.ones(1, device=edge_index.device)
         # edge_attr = edge_attr.expand(edge_index.size(1))
-        edge_attr = paddle.ones(edge_index.size(1), device=edge_index.device)
+        edge_attr = paddle.ones([
+            edge_index.shape[1],
+        ], device=edge_index.place)
 
-    adj = NotImplementedError(
-        "paddle.sparse_csr is not implemented in Paddle.")
+    adj = paddle.sparse.sparse_csr_tensor(
+        crows=index2ptr(edge_index[0], size[0]),
+        cols=edge_index[1],
+        values=edge_attr,
+        shape=tuple(size) + tuple(edge_attr.shape)[1:],
+        place=edge_index.place,
+    )
 
     return adj
 
@@ -301,38 +310,7 @@ def to_paddle_csc_tensor(
                size=(4, 4), nnz=6, layout=paddle.sparse_csc)
 
     """
-    if size is None:
-        size = int(edge_index.max()) + 1
-
-    if isinstance(size, (tuple, list)):
-        num_src_nodes, num_dst_nodes = size
-        if num_src_nodes is None:
-            num_src_nodes = int(edge_index[0].max()) + 1
-        if num_dst_nodes is None:
-            num_dst_nodes = int(edge_index[1].max()) + 1
-        size = (num_src_nodes, num_dst_nodes)
-    else:
-        size = (size, size)
-
-    if not is_coalesced:
-        edge_index, edge_attr = coalesce(edge_index, edge_attr, max(size),
-                                         sort_by_row=False)
-
-    if edge_attr is None:
-        # Expanded tensors are not yet supported in all Pypaddle code paths :(
-        # edge_attr = paddle.ones(1, device=edge_index.device)
-        # edge_attr = edge_attr.expand(edge_index.size(1))
-        edge_attr = paddle.ones(edge_index.size(1), device=edge_index.device)
-
-    adj = paddle.sparse_csc_tensor(
-        ccol_indices=index2ptr(edge_index[1], size[1]),
-        row_indices=edge_index[0],
-        values=edge_attr,
-        size=tuple(size) + edge_attr.size()[1:],
-        device=edge_index.device,
-    )
-
-    return adj
+    raise NotImplementedError("PaddlePaddle don't not support csc")
 
 
 def to_paddle_sparse_tensor(
