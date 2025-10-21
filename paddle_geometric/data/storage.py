@@ -242,8 +242,7 @@ class BaseStorage(MutableMapping):
         r"""Performs tensor dtype and/or device conversion, either for all
         attributes or only the ones given in :obj:`*args`.
         """
-        return self.apply(
-            lambda x: x.to(device=device, non_blocking=non_blocking), *args)
+        return self.apply(lambda x: x.to(device=device), *args)
 
     def cpu(self, *args: str) -> Self:
         r"""Copies attributes to CPU memory, either for all attributes or only
@@ -267,13 +266,15 @@ class BaseStorage(MutableMapping):
         r"""Copies attributes to pinned memory, either for all attributes or
         only the ones given in :obj:`*args`.
         """
-        return self.apply(lambda x: x.pin_memory(), *args)
+        raise NotImplementedError
+        # return self.apply(lambda x: x.pin_memory(), *args)
 
     def share_memory_(self, *args: str) -> Self:
         r"""Moves attributes to shared memory, either for all attributes or
         only the ones given in :obj:`*args`.
         """
-        return self.apply(lambda x: x.share_memory_(), *args)
+        raise NotImplementedError
+        # return self.apply(lambda x: x.share_memory_(), *args)
 
     def detach_(self, *args: str) -> Self:
         r"""Detaches attributes from the computation graph, either for all
@@ -292,16 +293,20 @@ class BaseStorage(MutableMapping):
         r"""Tracks gradient computation, either for all attributes or only the
         ones given in :obj:`*args`.
         """
-        return self.apply(
-            lambda x: x.requires_grad_(requires_grad=requires_grad), *args)
+        def func(x, requires_grad):
+            x.requires_grad = requires_grad
+            return x
 
-    def record_stream(self, stream: paddle.device.cuda.Stream, *args: str) -> 'Self':
+        return self.apply_(lambda x: func(x, requires_grad), *args)
+
+    def record_stream(self, stream: paddle.device.cuda.Stream, *args:
+                      str) -> 'Self':
         r"""Ensures that the tensor memory is not reused for another tensor
         until all current work queued on :obj:`stream` has been completed,
         either for all attributes or only the ones given in :obj:`*args`.
         """
-        return self.apply_(lambda x: x._record_stream(stream), *args)
-
+        raise NotImplementedError
+        # return self.apply_(lambda x: x._record_stream(stream), *args)
 
     # Time Handling ###########################################################
 
@@ -351,12 +356,12 @@ class BaseStorage(MutableMapping):
             return bool(paddle.all(self.time[:-1] <= self.time[1:]))
         return True
 
-    def sort_by_time(self) -> 'MyClass':
+    def sort_by_time(self) -> Self:
         if self.is_sorted_by_time():
             return self
 
         if 'time' in self:
-            _, perm = paddle.argsort(self.time, axis=0)
+            _, perm = paddle.compat.sort(self.time, stable=True)
 
             if self.is_node_attr('time'):
                 keys = self.node_attrs()
@@ -474,11 +479,11 @@ class NodeStorage(BaseStorage):
     def num_node_features(self) -> int:
         x: Optional[Any] = self.get('x')
         if isinstance(x, Tensor):
-            return 1 if x.dim() == 1 else x.size(-1)
+            return 1 if x.dim() == 1 else x.shape[-1]
         if isinstance(x, np.ndarray):
             return 1 if x.ndim == 1 else x.shape[-1]
         if isinstance(x, SparseTensor):
-            return 1 if x.dim() == 1 else x.size(-1)
+            return 1 if x.dim() == 1 else x.shape[-1]
         if isinstance(x, TensorFrame):
             return x.num_cols
 
@@ -560,15 +565,12 @@ class EdgeStorage(BaseStorage):
         if 'edge_index' in self:
             return self['edge_index']
         if 'adj' in self and isinstance(self.adj, SparseTensor):
-            coo_indices = self.adj.to_dense().nonzero(as_tuple=False)
-            return paddle.stack([coo_indices[:, 0], coo_indices[:, 1]], axis=0)
+            return paddle.stack(x=self.adj.coo()[:2], axis=0)
         if 'adj_t' in self and isinstance(self.adj_t, SparseTensor):
-            coo_indices = self.adj_t.to_dense().nonzero(as_tuple=False)
-            return paddle.stack([coo_indices[:, 1], coo_indices[:, 0]], axis=0)
+            return paddle.stack(x=self.adj_t.coo()[:2][::-1], axis=0)
         raise AttributeError(
             f"'{self.__class__.__name__}' object has no attribute "
             f"'edge_index', 'adj' or 'adj_t'")
-
 
     @edge_index.setter
     def edge_index(self, edge_index: Optional[Tensor]) -> None:
@@ -585,7 +587,7 @@ class EdgeStorage(BaseStorage):
                 return value.shape[cat_dim]
             if isinstance(value, np.ndarray) and key in E_KEYS:
                 cat_dim = self._parent().__cat_dim__(key, value, self)
-                return value.shape[cat_dim]
+                return tuple(value.shape)[cat_dim]
             if isinstance(value, TensorFrame) and key in E_KEYS:
                 return value.num_rows
         for key, value in self.items():
@@ -608,9 +610,9 @@ class EdgeStorage(BaseStorage):
     def num_edge_features(self) -> int:
         edge_attr: Optional[Any] = self.get('edge_attr')
         if isinstance(edge_attr, Tensor):
-            return 1 if edge_attr.dim() == 1 else edge_attr.size(-1)
+            return 1 if edge_attr.dim() == 1 else edge_attr.shape[-1]
         if isinstance(edge_attr, np.ndarray):
-            return 1 if edge_attr.ndim == 1 else edge_attr.shape[-1]
+            return 1 if edge_attr.ndim == 1 else tuple(edge_attr.shape)[-1]
         if isinstance(edge_attr, TensorFrame):
             return edge_attr.num_cols
         return 0
@@ -630,7 +632,6 @@ class EdgeStorage(BaseStorage):
     def size(
         self, dim: Optional[int] = None
     ) -> Union[Tuple[Optional[int], Optional[int]], Optional[int]]:
-
         if self._key is None:
             raise NameError("Unable to infer 'size' without explicit "
                             "'_key' assignment")
@@ -702,11 +703,10 @@ class EdgeStorage(BaseStorage):
         if 'edge_index' in self:
             size = [s for s in self.size() if s is not None]
             num_nodes = max(size) if len(size) > 0 else None
-
             new_edge_index = coalesce(self.edge_index, num_nodes=num_nodes)
-
             return (self.edge_index.numel() == new_edge_index.numel()
-                    and paddle.equal(self.edge_index, new_edge_index))
+                    and paddle.equal_all(x=self.edge_index,
+                                         y=new_edge_index).item())
 
         return True
 
@@ -899,7 +899,7 @@ def recursive_apply_(data: Any, func: Callable) -> Any:
 def recursive_apply(data: Any, func: Callable) -> Any:
     if isinstance(data, Tensor):
         return func(data)
-    elif isinstance(data, paddle.nn.Layer):
+    elif isinstance(data, paddle.nn.RNN):  # torch.nn.utils.rnn.PackedSequence
         return func(data)
     elif isinstance(data, tuple) and hasattr(data, '_fields'):  # namedtuple
         return type(data)(*(recursive_apply(d, func) for d in data))
