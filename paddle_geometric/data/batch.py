@@ -80,8 +80,8 @@ class Batch(metaclass=DynamicInheritance):
             cls=self.__class__.__bases__[-1],
             batch=self,
             idx=idx,
-            slice_dict=getattr(self, '_slice_dict'),
-            inc_dict=getattr(self, '_inc_dict'),
+            slice_dict=self._slice_dict,
+            inc_dict=self._inc_dict,
             decrement=True,
         )
 
@@ -134,7 +134,7 @@ class Batch(metaclass=DynamicInheritance):
         if hasattr(self, '_num_graphs'):
             return self._num_graphs
         elif hasattr(self, 'ptr'):
-            return self.ptr.shape[0] - 1
+            return self.ptr.numel() - 1
         elif hasattr(self, 'batch'):
             return int(self.batch.max()) + 1
         else:
