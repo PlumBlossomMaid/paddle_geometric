@@ -11,7 +11,12 @@ from paddle import Tensor
 from typing_extensions import Self
 
 from paddle_geometric import Index
-from paddle_geometric.data import EdgeAttr, FeatureStore, GraphStore, TensorAttr
+from paddle_geometric.data import (
+    EdgeAttr,
+    FeatureStore,
+    GraphStore,
+    TensorAttr,
+)
 from paddle_geometric.data.data import BaseData, Data, size_repr, warn_or_raise
 from paddle_geometric.data.graph_store import EdgeLayout
 from paddle_geometric.data.storage import BaseStorage, EdgeStorage, NodeStorage
@@ -34,7 +39,6 @@ from paddle_geometric.utils import (
     is_undirected,
     mask_select,
 )
-
 
 NodeOrEdgeStorage = Union[NodeStorage, EdgeStorage]
 
@@ -352,7 +356,7 @@ class HeteroData(BaseData, FeatureStore, GraphStore):
                 return value.get_dim_size()
             return int(value.max()) + 1
         elif isinstance(store, EdgeStorage) and 'index' in key:
-            return paddle.to_tensor(store.size()).reshape([2, 1])
+            return paddle.to_tensor(store.shape).view(2, 1)
         else:
             return 0
 
@@ -435,12 +439,12 @@ class HeteroData(BaseData, FeatureStore, GraphStore):
 
             if 'edge_index' in store:
                 if (store.edge_index.dim() != 2
-                        or store.edge_index.size(0) != 2):
+                        or store.edge_index.shape[0] != 2):
                     status = False
                     warn_or_raise(
                         f"'edge_index' of edge type {edge_type} needs to be "
                         f"of shape [2, num_edges] in '{cls_name}' (found "
-                        f"{store.edge_index.size()})", raise_on_error)
+                        f"{store.edge_index.shape})", raise_on_error)
 
             if 'edge_index' in store and store.edge_index.numel() > 0:
                 if store.edge_index.min() < 0:
@@ -689,7 +693,7 @@ class HeteroData(BaseData, FeatureStore, GraphStore):
                     if subset.dtype == paddle.bool:
                         data[node_type].num_nodes = int(subset.sum())
                     else:
-                        data[node_type].num_nodes = subset.size(0)
+                        data[node_type].num_nodes = subset.shape[0]
                 elif self[node_type].is_node_attr(key):
                     data[node_type][key] = value[subset]
                 else:
@@ -749,7 +753,8 @@ class HeteroData(BaseData, FeatureStore, GraphStore):
                     if subset.dtype == paddle.bool:
                         new_edge_store[key] = mask_select(value, dim, subset)
                     else:
-                        new_edge_store[key] = value.index_select(dim, subset)
+                        new_edge_store[key] = value.index_select(
+                            axis=dim, index=subset)
 
         return data
 
@@ -842,7 +847,8 @@ class HeteroData(BaseData, FeatureStore, GraphStore):
                         continue
                     if isinstance(value, Tensor):
                         dim = self.__cat_dim__(key, value, store)
-                        size = value.size()[:dim] + value.size()[dim + 1:]
+                        size = tuple(value.shape)[:dim] + tuple(
+                            value.shape)[dim + 1:]
                         sizes_dict[key].append(tuple(size))
             return sizes_dict
 
@@ -877,7 +883,8 @@ class HeteroData(BaseData, FeatureStore, GraphStore):
                         else:
                             dim_size = store.num_edges
                         shape = sizes[0][:dim] + (dim_size, ) + sizes[0][dim:]
-                        store[key] = paddle.full(shape, dummy, dtype=ref.dtype, device=ref.device)
+                        store[key] = paddle.full(shape, dummy, dtype=ref.dtype,
+                                                 device=ref.place)
 
         def _consistent_size(stores: List[BaseStorage]) -> List[str]:
             sizes_dict = get_sizes(stores)
@@ -921,7 +928,7 @@ class HeteroData(BaseData, FeatureStore, GraphStore):
             fill_dummy_(self.edge_stores, edge_attrs)
 
         edge_index, node_slices, edge_slices = to_homogeneous_edge_index(self)
-        device = edge_index.device if edge_index is not None else None
+        device = edge_index.place if edge_index is not None else None
 
         data = Data(**self._global_store.to_dict())
         if edge_index is not None:
@@ -945,10 +952,12 @@ class HeteroData(BaseData, FeatureStore, GraphStore):
                 # pad them with zeros if necessary in case their size doesn't
                 # match:
                 if values[0].dim() == 2 and dim == 0:
-                    _max = max([value.size(-1) for value in values])
+                    _max = max([value.shape[-1] for value in values])
                     for i, v in enumerate(values):
-                        if v.size(-1) < _max:
-                            pad = v.new_zeros(v.size(0), _max - v.size(-1))
+                        if v.shape[-1] < _max:
+                            pad = paddle.zeros(
+                                shape=[v.shape[0], _max - v.shape[-1]],
+                                dtype=v.dtype)
                             values[i] = paddle.concat([v, pad], axis=-1)
                 value = paddle.concat(values, axis=dim)
             data[key] = value
@@ -962,7 +971,8 @@ class HeteroData(BaseData, FeatureStore, GraphStore):
         for key in edge_attrs:
             values = [store[key] for store in self.edge_stores]
             dim = self.__cat_dim__(key, values[0], self.edge_stores[0])
-            value = paddle.concat(values, axis=dim) if len(values) > 1 else values[0]
+            value = paddle.concat(values,
+                                  axis=dim) if len(values) > 1 else values[0]
             data[key] = value
 
         if 'edge_label_index' in self:
@@ -978,13 +988,13 @@ class HeteroData(BaseData, FeatureStore, GraphStore):
         if add_node_type:
             sizes = [offset[1] - offset[0] for offset in node_slices.values()]
             sizes = paddle.to_tensor(sizes, dtype='int64', place=device)
-            node_type = paddle.arange(len(sizes), dtype='int64', place=device)
+            node_type = paddle.arange(len(sizes), dtype='int64', device=device)
             data.node_type = node_type.repeat_interleave(sizes)
 
         if add_edge_type and edge_index is not None:
             sizes = [offset[1] - offset[0] for offset in edge_slices.values()]
             sizes = paddle.to_tensor(sizes, dtype='int64', place=device)
-            edge_type = paddle.arange(len(sizes), dtype='int64', place=device)
+            edge_type = paddle.arange(len(sizes), dtype='int64', device=device)
             data.edge_type = edge_type.repeat_interleave(sizes)
 
         return data
@@ -1028,7 +1038,7 @@ class HeteroData(BaseData, FeatureStore, GraphStore):
         return False
 
     def _get_tensor_size(self, attr: TensorAttr) -> Tuple:
-        return self._get_tensor(attr).size()
+        return tuple(self._get_tensor(attr).shape)
 
     def get_all_tensor_attrs(self) -> List[TensorAttr]:
         out = []
@@ -1078,7 +1088,7 @@ class HeteroData(BaseData, FeatureStore, GraphStore):
         if (edge_attr.edge_type, edge_attr.layout) in edge_attrs:
             edge_attr = edge_attrs[(edge_attr.edge_type, edge_attr.layout)]
         if edge_attr.size is None:
-            edge_attr.size = store.size()  # Modify in-place.
+            edge_attr.size = tuple(store.shape)
 
         if edge_attr.layout == EdgeLayout.COO and 'edge_index' in store:
             row, col = store.edge_index
@@ -1156,7 +1166,7 @@ def offset_edge_index(
     """
     src, _, dst = edge_type
     offset = [[node_slices[src][0]], [node_slices[dst][0]]]
-    offset = paddle.to_tensor(offset, device=edge_index.device)
+    offset = paddle.to_tensor(offset, place=edge_index.place)
     return edge_index + offset
 
 
@@ -1174,8 +1184,8 @@ def to_homogeneous_edge_index(
     for edge_type, edge_index in data.collect('edge_index', True).items():
         edge_index = offset_edge_index(node_slices, edge_type, edge_index)
         edge_indices.append(edge_index)
-        edge_slices[edge_type] = (cumsum, cumsum + edge_index.size(1))
-        cumsum += edge_index.size(1)
+        edge_slices[edge_type] = (cumsum, cumsum + edge_index.shape[1])
+        cumsum += edge_index.shape[1]
 
     edge_index: Optional[Tensor] = None
     if len(edge_indices) == 1:  # Memory-efficient `torch.cat`:
