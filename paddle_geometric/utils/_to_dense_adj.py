@@ -27,40 +27,31 @@ def to_dense_adj(
     :rtype: :class:`Tensor`
     """
     if batch is None:
-        max_index = int(paddle.max(edge_index)) + 1 if edge_index.numel() > 0 else 0
-        batch = paddle.zeros([max_index], dtype='int64', place=edge_index.place)
-
+        max_index = int(edge_index.max()) + 1 if edge_index.size > 0 else 0
+        batch = paddle.zeros(shape=max_index, dtype=edge_index.dtype)
     if batch_size is None:
-        batch_size = int(paddle.max(batch)) + 1 if batch.numel() > 0 else 1
-
-    one = paddle.ones([batch.size], dtype='int64', place=batch.place)
-    num_nodes = scatter(one, batch, dim=0, dim_size=batch_size, reduce='sum')
+        batch_size = int(batch.max()) + 1 if batch.size > 0 else 1
+    one = paddle.ones(shape=batch.shape[0], dtype=batch.dtype)
+    num_nodes = scatter(one, batch, dim=0, dim_size=batch_size, reduce="sum")
     cum_nodes = cumsum(num_nodes)
-
     idx0 = batch[edge_index[0]]
     idx1 = edge_index[0] - cum_nodes[batch][edge_index[0]]
     idx2 = edge_index[1] - cum_nodes[batch][edge_index[1]]
-
     if max_num_nodes is None:
-        max_num_nodes = int(paddle.max(num_nodes))
-
-    elif ((idx1.numel() > 0 and paddle.max(idx1) >= max_num_nodes)
-          or (idx2.numel() > 0 and paddle.max(idx2) >= max_num_nodes)):
+        max_num_nodes = int(num_nodes.max())
+    elif (idx1.size > 0 and idx1.max() >= max_num_nodes
+          or idx2.size > 0 and idx2.max() >= max_num_nodes):
         mask = (idx1 < max_num_nodes) & (idx2 < max_num_nodes)
         idx0 = idx0[mask]
         idx1 = idx1[mask]
         idx2 = idx2[mask]
         edge_attr = None if edge_attr is None else edge_attr[mask]
-
     if edge_attr is None:
-        edge_attr = paddle.ones([idx0.numel()], dtype=edge_index.dtype, place=edge_index.place)
-
+        edge_attr = paddle.ones(shape=idx0.size)
     size = [batch_size, max_num_nodes, max_num_nodes]
-    size += list(edge_attr.shape)[1:]
+    size += list(tuple(edge_attr.shape))[1:]
     flattened_size = batch_size * max_num_nodes * max_num_nodes
-
     idx = idx0 * max_num_nodes * max_num_nodes + idx1 * max_num_nodes + idx2
-    adj = scatter(edge_attr, idx, dim=0, dim_size=flattened_size, reduce='sum')
-    adj = adj.reshape(size)
-
+    adj = scatter(edge_attr, idx, dim=0, dim_size=flattened_size, reduce="sum")
+    adj = adj.view(size)
     return adj
