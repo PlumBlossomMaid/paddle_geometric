@@ -3,10 +3,10 @@ import warnings
 import paddle
 from paddle import Tensor
 
-import paddle_geometric.typing
 from paddle_geometric import EdgeIndex
 from paddle_geometric.typing import Adj, SparseTensor
-from paddle_geometric.utils import scatter
+from paddle_geometric.utils import is_paddle_sparse_tensor
+
 
 def spmm(
     src: Adj,
@@ -28,43 +28,48 @@ def spmm(
 
     :rtype: :class:`Tensor`
     """
-    reduce = 'sum' if reduce == 'add' else reduce
-
-    if reduce not in ['sum', 'mean', 'min', 'max']:
+    reduce = "sum" if reduce == "add" else reduce
+    if reduce not in ["sum", "mean", "min", "max"]:
         raise ValueError(f"`reduce` argument '{reduce}' not supported")
-
+    warnings.warn(f"Dot not support reduce:{reduce}")
     if isinstance(src, EdgeIndex):
-        return src.matmul(other=other, reduce=reduce)
-
+        return src.matmul(other=other)
     if isinstance(src, SparseTensor):
         if src.nnz() == 0:
-            return paddle.zeros([src.shape[0], other.shape[1]], dtype=other.dtype)
+            return paddle.zeros(shape=[src.shape[0], other.shape[1]],
+                                dtype=other.dtype)
+        if (other.dim() == 2 and not src.is_cuda()
+                and not src.requires_grad()):
+            csr = src.to_paddle_sparse_csr_tensor().to(other.dtype)
+            return paddle.sparse.matmul(csr, other)
+        # return paddle_sparse.matmul(src, other, reduce)
+        raise NotImplementedError()
+    if not is_paddle_sparse_tensor(src):
+        raise ValueError(
+            "'src' must be a 'torch_sparse.SparseTensor' or a 'torch.sparse.Tensor'"
+        )
+    if src.place.is_gpu_place() and (reduce == "min" or reduce == "max"):
+        raise NotImplementedError(
+            f"`{reduce}` reduction is not yet supported for 'torch.sparse.Tensor' on device '{src.place}'"
+        )
+    if src.is_sparse_coo():
+        warnings.warn(
+            "Converting sparse tensor to CSR format for more efficient "
+            "processing. Consider converting your sparse tensor to CSR format "
+            f"beforehand to avoid repeated conversion (got '{src.layout}')")
+        src = src.to_sparse_csr()
 
-        # Use Paddle's sparse mm if available
-        if paddle.version.full_version >= "2.0.0" and other.ndim == 2:
-            return paddle.sparse.matmul(src, other)
-
+    if reduce == "sum":
+        return paddle.sparse.matmul(x=src, y=other)
+    if src.is_sparse_csr() and not src.place.is_gpu_place():
         return paddle.sparse.matmul(src, other)
-
-    if not isinstance(src, paddle.sparse.coo_tensor):
-        raise ValueError("'src' must be a 'paddle.sparse.SparseTensor' or a 'paddle.sparse.coo_tensor'")
-
-    # If reducing by "sum"
-    if reduce == 'sum':
-        return paddle.sparse.matmul(src, other)
-
-    # Handle "mean" reduction by dividing by the degree:
-    if reduce == 'mean':
-        if isinstance(src, paddle.sparse.csr_tensor):
-            ptr = src.crow_indices()
+    if reduce == "mean":
+        if src.is_sparse_csr():
+            ptr = src.crows()
             deg = ptr[1:] - ptr[:-1]
-        else:  # Assuming COO format
-            src = src.coalesce()
-            ones = paddle.ones_like(src.values())
-            index = src.indices()[0]
-            deg = scatter(ones, index, 0, dim_size=src.shape[0], reduce='sum')
+        else:
+            raise NotImplementedError()
+        return paddle.sparse.matmul(x=src, y=other.cast(src.dtype)) / deg.view(
+            -1, 1).cast(src.dtype).clip_(min=1)
 
-        return paddle.sparse.matmul(src, other) / deg.reshape([-1, 1]).clip(min=1)
-
-    raise ValueError(f"`{reduce}` reduction is not supported for "
-                     f"'paddle.sparse.Tensor' on device '{src.place}'")
+    return paddle.sparse.matmul(src, other)
