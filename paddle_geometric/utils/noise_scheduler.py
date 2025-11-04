@@ -36,12 +36,14 @@ def get_smld_sigma_schedule(
     """
     log_sigma_max = math.log(sigma_max)
     log_sigma_min = math.log(sigma_min)
-    return paddle.exp(paddle.linspace(
+    data = paddle.linspace(
         log_sigma_max,
         log_sigma_min,
         num_scales,
         dtype=dtype,
-    ))
+    )
+    data = data.to(device=device)
+    return paddle.exp(data)
 
 
 def get_diffusion_beta_schedule(
@@ -73,34 +75,38 @@ def get_diffusion_beta_schedule(
             (default: :obj:`None`)
     """
     if schedule_type == 'linear':
-        return paddle.linspace(
+        data = paddle.linspace(
             beta_start,
             beta_end,
             num_diffusion_timesteps,
             dtype=dtype,
         )
+        data = data.to(device=device)
+        return data
 
     if schedule_type == 'quadratic':
-        return paddle.linspace(
+        data = paddle.linspace(
             beta_start**0.5,
             beta_end**0.5,
             num_diffusion_timesteps,
             dtype=dtype,
-        )**2
+        )
+        data = data.to(device=device)
+        data = data**2
+        return data
 
     if schedule_type == 'constant':
-        return paddle.full(
-            shape=[num_diffusion_timesteps],
-            fill_value=beta_end,
-            dtype=dtype,
-        )
+        return paddle.full(shape=[num_diffusion_timesteps],
+                           fill_value=beta_end, dtype=dtype, device=device)
 
     if schedule_type == 'sigmoid':
-        return paddle.linspace(
+        data = paddle.linspace(
             -6,
             6,
             num_diffusion_timesteps,
             dtype=dtype,
-        ).sigmoid() * (beta_end - beta_start) + beta_start
-
+        )
+        data = data.to(device=device)
+        data = data.sigmoid() * (beta_end - beta_start) + beta_start
+        return data
     raise ValueError(f"Found invalid 'schedule_type' (got '{schedule_type}')")
