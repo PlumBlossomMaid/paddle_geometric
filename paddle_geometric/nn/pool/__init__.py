@@ -60,8 +60,8 @@ def fps(
     :rtype: :class:`torch.Tensor`
     """
     if not paddle_geometric.typing.WITH_TORCH_CLUSTER_BATCH_SIZE:
-        return torch_cluster.fps(x, batch, ratio, random_start)
-    return torch_cluster.fps(x, batch, ratio, random_start, batch_size)
+        return paddle_cluster.fps(x, batch, ratio, random_start)
+    return paddle_cluster.fps(x, batch, ratio, random_start, batch_size)
 
 
 def knn(
@@ -112,10 +112,10 @@ def knn(
     :rtype: :class:`torch.Tensor`
     """
     if not paddle_geometric.typing.WITH_TORCH_CLUSTER_BATCH_SIZE:
-        return torch_cluster.knn(x, y, k, batch_x, batch_y, cosine,
-                                 num_workers)
-    return torch_cluster.knn(x, y, k, batch_x, batch_y, cosine, num_workers,
-                             batch_size)
+        return paddle_cluster.knn(x, y, k, batch_x, batch_y, cosine,
+                                  num_workers)
+    return paddle_cluster.knn(x, y, k, batch_x, batch_y, cosine, num_workers,
+                              batch_size)
 
 
 def knn_graph(
@@ -168,10 +168,10 @@ def knn_graph(
         batch = batch.to(x.device)
 
     if not paddle_geometric.typing.WITH_TORCH_CLUSTER_BATCH_SIZE:
-        return torch_cluster.knn_graph(x, k, batch, loop, flow, cosine,
-                                       num_workers)
-    return torch_cluster.knn_graph(x, k, batch, loop, flow, cosine,
-                                   num_workers, batch_size)
+        return paddle_cluster.knn_graph(x, k, batch, loop, flow, cosine,
+                                        num_workers)
+    return paddle_cluster.knn_graph(x, k, batch, loop, flow, cosine,
+                                    num_workers, batch_size)
 
 
 def radius(
@@ -228,10 +228,10 @@ def radius(
         inputs to GPU before proceeding.
     """
     if not paddle_geometric.typing.WITH_TORCH_CLUSTER_BATCH_SIZE:
-        return torch_cluster.radius(x, y, r, batch_x, batch_y,
-                                    max_num_neighbors, num_workers)
-    return torch_cluster.radius(x, y, r, batch_x, batch_y, max_num_neighbors,
-                                num_workers, batch_size)
+        return paddle_cluster.radius(x, y, r, batch_x, batch_y,
+                                     max_num_neighbors, num_workers)
+    return paddle_cluster.radius(x, y, r, batch_x, batch_y, max_num_neighbors,
+                                 num_workers, batch_size)
 
 
 def radius_graph(
@@ -284,16 +284,17 @@ def radius_graph(
         Consider setting :obj:`max_num_neighbors` to :obj:`None` or moving
         inputs to GPU before proceeding.
     """
-    if batch is not None and x.device != batch.device:
+    if batch is not None and x.place != batch.place:
         warnings.warn("Input tensor 'x' and 'batch' are on different devices "
                       "in 'radius_graph'. Performing blocking device transfer")
-        batch = batch.to(x.device)
+        batch = batch.to(x.place)
 
-    if not paddle_geometric.typing.WITH_TORCH_CLUSTER_BATCH_SIZE:
-        return torch_cluster.radius_graph(x, r, batch, loop, max_num_neighbors,
-                                          flow, num_workers)
-    return torch_cluster.radius_graph(x, r, batch, loop, max_num_neighbors,
-                                      flow, num_workers, batch_size)
+    if not paddle_geometric.typing.WITH_PADDLE_CLUSTER_BATCH_SIZE:
+        return paddle_cluster.radius_graph(x, r, batch, loop,
+                                           max_num_neighbors, flow,
+                                           num_workers)
+    return paddle_cluster.radius_graph(x, r, batch, loop, max_num_neighbors,
+                                       flow, num_workers, batch_size)
 
 
 def nearest(
@@ -330,7 +331,7 @@ def nearest(
 
     :rtype: :class:`torch.Tensor`
     """
-    return torch_cluster.nearest(x, y, batch_x, batch_y)
+    return paddle_cluster.nearest(x, y, batch_x, batch_y)
 
 
 __all__ = [
