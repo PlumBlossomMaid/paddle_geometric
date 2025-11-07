@@ -76,11 +76,10 @@ except Exception as e:
     WITH_PADDLE_SCATTER = False
 
 try:
-    raise ImportError
-    # import paddle_cluster  # noqa
-    # WITH_PADDLE_CLUSTER = True
-    # WITH_PADDLE_CLUSTER_BATCH_SIZE =
-    # 'batch_size' in paddle_cluster.knn.__doc__
+    # raise ImportError
+    import paddle_cluster  # noqa
+    WITH_PADDLE_CLUSTER = True
+    WITH_PADDLE_CLUSTER_BATCH_SIZE = 'batch_size' in paddle_cluster.knn.__doc__
 except Exception as e:
     if not isinstance(e, ImportError):  # pragma: no cover
         warnings.warn(f"An issue occurred while importing 'paddle-cluster'. "

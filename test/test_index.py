@@ -4,7 +4,6 @@ from typing import List
 import paddle
 import pytest
 
-import paddle_geometric.typing
 from paddle_geometric import Index, place2devicestr
 from paddle_geometric.io import fs
 from paddle_geometric.paddle_utils import *  # noqa
@@ -161,11 +160,9 @@ def test_to_function(dtype, device):
 
     out = index.to("int32")
     assert out.dtype == paddle.int32
-    if paddle_geometric.typing.WITH_PP32:
-        assert isinstance(out, Index)
-        assert out._indptr.dtype == paddle.int32
-    else:
-        assert not isinstance(out, Index)
+
+    assert isinstance(out, Index)
+    assert out._indptr.dtype == paddle.int32
 
     out = index.to("float32")
     assert not isinstance(out, Index)
@@ -177,10 +174,8 @@ def test_to_function(dtype, device):
 
     out = index.int()
     assert out.dtype == paddle.int32
-    if paddle_geometric.typing.WITH_PP32:
-        assert isinstance(out, Index)
-    else:
-        assert not isinstance(out, Index)
+
+    assert isinstance(out, Index)
 
 
 @onlyCUDA

@@ -203,8 +203,6 @@ def test_to_heterogeneous_empty_edge_index():
     assert len(hetero_data) == 1
     assert paddle.equal_all(hetero_data['0'].x, data.x).item()
 
-    import pdb
-    pdb.set_trace()
     hetero_data = data.to_heterogeneous(
         node_type_names=['0'],
         edge_type_names=[('0', 'to', '0')],

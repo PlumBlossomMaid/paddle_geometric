@@ -66,14 +66,13 @@ def dim2perm(ndim, dim0, dim1):
     return perm
 
 
-def _Tensor_split(self, split_size, dim=0):
-    if isinstance(split_size, int):
-        return paddle.split(self, self.shape[dim] // split_size, dim)
-    else:
-        return paddle.split(self, split_size, dim)
+# def _Tensor_split(self, split_size, dim=0):
+#     if isinstance(split_size, int):
+#         return paddle.split(self, self.shape[dim] // split_size, dim)
+#     else:
+#         return paddle.split(self, split_size, dim)
 
-
-paddle.Tensor.split = _Tensor_split
+# paddle.Tensor.split = _Tensor_split
 
 
 def _Tensor_max(self, *args, **kwargs):

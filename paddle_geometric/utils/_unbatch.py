@@ -64,4 +64,4 @@ def unbatch_edge_index(
     edge_batch = batch[edge_index[0]]
     edge_index = edge_index - ptr[edge_batch]
     sizes = degree(edge_batch, batch_size, dtype="int64").cpu().tolist()
-    return edge_index.split(sizes, dim=1)
+    return paddle.compat.split(edge_index, sizes, dim=1)
