@@ -1,48 +1,63 @@
 import copy
 import math
-from typing import Any, Optional, Dict, Tuple, Union
+import sys
+import time
+from collections import OrderedDict
+from typing import Any, Dict, Optional, Tuple, Union
 
 import paddle
-import paddle.nn.functional as F
 from paddle import Tensor
-from paddle.nn import Layer, initializer
-from paddle.nn.initializer import Uniform, XavierUniform, KaimingUniform
+from paddle.nn import Layer
+
+import paddle_geometric.backend
+import paddle_geometric.typing
+from paddle_geometric import is_compiling
+from paddle_geometric.index import index2ptr
+from paddle_geometric.nn import inits
+from paddle_geometric.typing import pyg_lib
+from paddle_geometric.utils import index_sort
+
 
 def is_uninitialized_parameter(x: Any) -> bool:
     # Check if the parameter is uninitialized
-    return isinstance(x, paddle.nn.UninitializedParameter)
+    # return isinstance(x, paddle.nn.UninitializedParameter)
+    shape = x.shape
+    for shape_i in shape:
+        if shape_i <= 0:
+            return True
+    return False
 
-def reset_weight_(weight: Tensor, in_channels: int, initializer: Optional[str] = None) -> Tensor:
-    # Initialize weights based on the specified method
+
+def reset_weight_(weight: paddle.Tensor, in_channels: int,
+                  initializer: Optional[str] = None) -> paddle.Tensor:
     if in_channels <= 0:
         pass
-    elif initializer == 'glorot':
-        XavierUniform()(weight)
-    elif initializer == 'uniform':
+    elif initializer == "glorot":
+        inits.glorot(weight)
+    elif initializer == "uniform":
         bound = 1.0 / math.sqrt(in_channels)
-        Uniform(-bound, bound)(weight)
-    elif initializer == 'kaiming_uniform':
-        KaimingUniform()(weight)
+        paddle.nn.init.uniform_(weight.data, -bound, bound)
+    elif initializer == "kaiming_uniform":
+        inits.kaiming_uniform(weight, fan=in_channels, a=math.sqrt(5))
     elif initializer is None:
-        KaimingUniform()(weight)
+        inits.kaiming_uniform(weight, fan=in_channels, a=math.sqrt(5))
     else:
         raise RuntimeError(f"Weight initializer '{initializer}' not supported")
-
     return weight
 
-def reset_bias_(bias: Optional[Tensor], in_channels: int, initializer: Optional[str] = None) -> Optional[Tensor]:
-    # Initialize biases based on the specified method
+
+def reset_bias_(bias: Optional[paddle.Tensor], in_channels: int,
+                initializer: Optional[str] = None) -> Optional[paddle.Tensor]:
     if bias is None or in_channels <= 0:
         pass
-    elif initializer == 'zeros':
-        initializer.Zeros()(bias)
+    elif initializer == "zeros":
+        inits.zeros(bias)
     elif initializer is None:
-        bound = 1.0 / math.sqrt(in_channels)
-        Uniform(-bound, bound)(bias)
+        inits.uniform(in_channels, bias)
     else:
         raise RuntimeError(f"Bias initializer '{initializer}' not supported")
-
     return bias
+
 
 class Linear(Layer):
     r"""Applies a linear transformation to the incoming data.
@@ -89,34 +104,26 @@ class Linear(Layer):
 
         # Initialize weight if in_channels is specified, otherwise leave it uninitialized
         if in_channels > 0:
-            self.weight = self.create_parameter([out_channels, in_channels])
+            self.weight = paddle.base.framework.EagerParamBase.from_tensor(
+                tensor=paddle.empty(shape=[in_channels, out_channels]))
         else:
             # self.weight = paddle.nn.UninitializedParameter()
-            raise NotImplementedError("paddle.nn.UninitializedParameter is not implemented yet.")
+            self.weight = paddle.base.framework.EagerParamBase.from_tensor(
+                tensor=paddle.empty(shape=[0, 0]))
+            self._hook = self.register_forward_pre_hook(
+                self.initialize_parameters)
+            # raise NotImplementedError("paddle.nn.UninitializedParameter is not implemented yet.")
 
         # Initialize bias if specified
         if bias:
-            self.bias = self.create_parameter([out_channels])
+            self.bias = paddle.base.framework.EagerParamBase.from_tensor(
+                tensor=paddle.empty(shape=out_channels))
         else:
             self.bias = None
 
         self.reset_parameters()
 
-    def reset_parameters(self):
-        r"""Resets all learnable parameters of the module."""
-        reset_weight_(self.weight, self.in_channels, self.weight_initializer)
-        reset_bias_(self.bias, self.in_channels, self.bias_initializer)
-
-    def forward(self, x: Tensor) -> Tensor:
-        r"""Forward pass.
-
-        Args:
-            x (Tensor): The input features.
-        """
-        return F.linear(x, self.weight, self.bias)
-
     def __deepcopy__(self, memo):
-        # Custom deepcopy method to handle uninitialized parameters
         out = Linear(
             self.in_channels,
             self.out_channels,
@@ -124,14 +131,81 @@ class Linear(Layer):
             self.weight_initializer,
             self.bias_initializer,
         ).to(self.weight.place)
-
         if self.in_channels > 0:
-            out.weight.set_value(copy.deepcopy(self.weight, memo))
-
+            out.weight = copy.deepcopy(self.weight, memo)
         if self.bias is not None:
-            out.bias.set_value(copy.deepcopy(self.bias, memo))
-
+            out.bias = copy.deepcopy(self.bias, memo)
         return out
+
+    def reset_parameters(self):
+        r"""Resets all learnable parameters of the module."""
+        reset_weight_(self.weight, self.in_channels, self.weight_initializer)
+        reset_bias_(self.bias, self.in_channels, self.bias_initializer)
+
+    def forward(self, x: paddle.Tensor) -> paddle.Tensor:
+        """Forward pass.
+
+        Args:
+            x (torch.Tensor): The input features.
+        """
+        return paddle.nn.functional.linear(x=x, weight=self.weight,
+                                           bias=self.bias)
+
+    @paddle.no_grad()
+    def initialize_parameters(self, module, input):
+        if is_uninitialized_parameter(self.weight):
+            self.in_channels = input[0].shape[-1]
+            self.weight = paddle.base.framework.EagerParamBase.from_tensor(
+                tensor=paddle.empty(
+                    shape=[self.in_channels, self.out_channels]))
+            self.reset_parameters()
+        self._hook.remove()
+        delattr(self, "_hook")
+
+    def _state_dict_impl(
+        self,
+        destination=None,
+        include_sublayers: bool = True,
+        structured_name_prefix: str = "",
+        include_non_persistable_buffer: bool = False,
+        use_hook: bool = True,
+        keep_vars: bool = True,
+    ):
+        if destination is None:
+            destination = OrderedDict()
+        if (is_uninitialized_parameter(self.weight) or keep_vars):
+            destination[structured_name_prefix + "weight"] = self.weight
+        else:
+            destination[structured_name_prefix +
+                        "weight"] = self.weight.detach()
+        if self.bias is not None:
+            if keep_vars:
+                destination[structured_name_prefix + "bias"] = self.bias
+            else:
+                destination[structured_name_prefix +
+                            "bias"] = self.bias.detach()
+        return destination
+
+    def set_state_dict(self, state_dict, *args, **kwargs):
+        weight = state_dict.get("weight", None)
+        if weight is not None and is_uninitialized_parameter(weight):
+            self.in_channels = -1
+            self.weight = paddle.base.framework.EagerParamBase.from_tensor(
+                tensor=paddle.empty(shape=[0, 0]))
+            if not hasattr(self, '_hook'):
+                self._hook = self.register_forward_pre_hook(
+                    self.initialize_parameters)
+        elif weight is not None and is_uninitialized_parameter(self.weight):
+            self.in_channels = weight.size(0)
+            self.weight = paddle.base.framework.EagerParamBase.from_tensor(
+                tensor=paddle.empty(
+                    shape=[self.in_channels, self.out_channels]))
+            if hasattr(self, '_hook'):
+                self._hook.remove()
+                delattr(self, '_hook')
+        super().set_state_dict(state_dict, *args, **kwargs)
+
+    load_state_dict = set_state_dict
 
     def __repr__(self) -> str:
         # Custom string representation for Linear layer
@@ -181,26 +255,20 @@ class HeteroLinear(Layer):
         self.kwargs = kwargs
 
         if self.in_channels == -1:
-            self.weight = paddle.nn.UninitializedParameter()
+            self.weight = paddle.base.framework.EagerParamBase.from_tensor(
+                tensor=paddle.empty(shape=[0, 0, 0]))
             self._hook = self.register_forward_pre_hook(
                 self.initialize_parameters)
         else:
-            # Create the weight parameter using paddle.create_parameter
-            self.weight = paddle.create_parameter(
-                shape=[num_types, in_channels, out_channels],  # Shape of the weight tensor
-                dtype=paddle.float32,  # Data type of the parameter (e.g., float32, float64)
-                default_initializer=paddle.nn.initializer.XavierUniform()
-                # Default initializer, Xavier uniform distribution
-            )
+            self.weight = paddle.base.framework.EagerParamBase.from_tensor(
+                tensor=paddle.empty(
+                    shape=[num_types, in_channels, out_channels]))
 
         if kwargs.get('bias', True):
-            self.bias = paddle.create_parameter(
-                shape=[num_types, out_channels],  # Shape of the bias tensor
-                dtype=paddle.float32,  # Data type of the parameter (e.g., float32, float64)
-                default_initializer=paddle.nn.initializer.Zeros()  # Initialize the bias with zeros
-            )
+            self.bias = paddle.base.framework.EagerParamBase.from_tensor(
+                tensor=paddle.empty(shape=[num_types, out_channels]))
         else:
-            self.register_parameter('bias', None)
+            self.add_parameter(name="bias", parameter=None)
 
         self._timing_cache: Dict[int, Tuple[float, float]] = {}
 
@@ -214,41 +282,81 @@ class HeteroLinear(Layer):
                     self.kwargs.get('bias_initializer', None))
 
     def forward_naive(self, x: Tensor, type_ptr: Tensor) -> Tensor:
-        out = paddle.zeros([x.shape[0], self.out_channels])
+        out = paddle.empty(shape=[x.shape[0], self.out_channels],
+                           dtype=x.dtype)
         for i, (start, end) in enumerate(zip(type_ptr[:-1], type_ptr[1:])):
-            out[start:end] = paddle.matmul(x[start:end], self.weight[i])
+            out[start:end] = x[start:end] @ self.weight[i]
         return out
 
-    def forward(self, x: Tensor, type_vec: Tensor) -> Tensor:
-        r"""The forward pass.
+    def forward_segmm(self, x: paddle.Tensor,
+                      type_ptr: paddle.Tensor) -> paddle.Tensor:
+        return pyg_lib.ops.segment_matmul(x, type_ptr, self.weight)
+
+    @paddle.no_grad()
+    def _update_timing_cache(self, x: paddle.Tensor, type_ptr: paddle.Tensor,
+                             key: int) -> None:
+        MEASURE_ITER = 1 if "pytest" in sys.modules else 3
+        if paddle.device.cuda.device_count() >= 1:
+            paddle.device.synchronize()
+        t = time.perf_counter()
+        for _ in range(MEASURE_ITER):
+            _ = self.forward_segmm(x, type_ptr)
+        if paddle.device.cuda.device_count() >= 1:
+            paddle.device.synchronize()
+        time_segmm = time.perf_counter() - t
+        if paddle.device.cuda.device_count() >= 1:
+            paddle.device.synchronize()
+        t = time.perf_counter()
+        for _ in range(MEASURE_ITER):
+            _ = self.forward_naive(x, type_ptr)
+        if paddle.device.cuda.device_count() >= 1:
+            paddle.device.synchronize()
+        time_naive = time.perf_counter() - t
+        self._timing_cache[key] = time_segmm, time_naive
+
+    def forward(self, x: paddle.Tensor,
+                type_vec: paddle.Tensor) -> paddle.Tensor:
+        """The forward pass.
 
         Args:
-            x (Tensor): The input features.
-            type_vec (Tensor): A vector that maps each entry to a type.
+            x (torch.Tensor): The input features.
+            type_vec (torch.Tensor): A vector that maps each entry to a type.
         """
-        perm: Optional[Tensor] = None
-        if not self.is_sorted and (paddle.any(type_vec[1:] < type_vec[:-1])):
-            type_vec, perm = paddle.sort(type_vec)
+        perm: Optional[paddle.Tensor] = None
+        if not self.is_sorted and (type_vec[1:] < type_vec[:-1]).any():
+            type_vec, perm = index_sort(type_vec, self.num_types)
             x = x[perm]
-
-        type_ptr = paddle.concat([paddle.zeros([1]), paddle.cumsum(paddle.ones_like(type_vec))])
-
-        out = self.forward_naive(x, type_ptr)
-
+        type_ptr = index2ptr(type_vec, self.num_types)
+        if paddle_geometric.backend.use_segment_matmul is None:
+            use_segment_matmul = False
+            if (paddle_geometric.typing.WITH_SEGMM and not is_compiling()):
+                key = math.floor(math.log10(x.shape[0]))
+                if key not in self._timing_cache:
+                    self._update_timing_cache(x, type_ptr, key)
+                time_segmm, time_naive = self._timing_cache[key]
+                use_segment_matmul = time_segmm < time_naive
+        else:
+            use_segment_matmul = paddle_geometric.backend.use_segment_matmul
+        if (paddle_geometric.typing.WITH_SEGMM and not is_compiling()
+                and use_segment_matmul):
+            out = self.forward_segmm(x, type_ptr)
+        else:
+            out = self.forward_naive(x, type_ptr)
         if self.bias is not None:
             out += self.bias[type_vec]
-
-        if perm is not None:  # Restore original order (if necessary).
-            out_unsorted = paddle.zeros_like(out)
+        if perm is not None:
+            out_unsorted = paddle.empty_like(out)
             out_unsorted[perm] = out
             out = out_unsorted
-
         return out
 
     def initialize_parameters(self, module, input):
         if is_uninitialized_parameter(self.weight):
             self.in_channels = input[0].shape[-1]
-            self.weight.materialize([self.num_types, self.in_channels, self.out_channels])
+            self.weight = paddle.base.framework.EagerParamBase.from_tensor(
+                tensor=paddle.empty(shape=[
+                    self.num_types, self.in_channels, self.out_channels
+                ]))
             self.reset_parameters()
         self._hook.remove()
         delattr(self, '_hook')
@@ -280,7 +388,7 @@ class HeteroDictLinear(Layer):
         types (List[Any], optional): The keys of the input dictionary.
             (default: :obj:`None`)
         **kwargs (optional): Additional arguments of
-            :class:`torch_geometric.nn.Linear`.
+            :class:`paddle_geometric.nn.Linear`.
     """
     def __init__(
         self,
@@ -342,11 +450,29 @@ class HeteroDictLinear(Layer):
                 features for each individual type.
         """
         out_dict = {}
-        for key, lin in self.lins.items():
-            if key in x_dict:
-                out_dict[key] = lin(x_dict[key])
+        use_segment_matmul = paddle_geometric.backend.use_segment_matmul
+        if use_segment_matmul is None:
+            use_segment_matmul = len(x_dict) >= 10
+        if (use_segment_matmul and paddle_geometric.typing.WITH_GMM
+                and not is_compiling()):
+            xs, weights, biases = [], [], []
+            for key, lin in self.lins.items():
+                if key in x_dict:
+                    xs.append(x_dict[key])
+                    weights.append(lin.weight.t())
+                    biases.append(lin.bias)
+            biases = None if biases[0] is None else biases
+            outs = pyg_lib.ops.grouped_matmul(xs, weights, biases)
+            for key, out in zip(x_dict.keys(), outs):
+                if key in x_dict:
+                    out_dict[key] = out
+        else:
+            for key, lin in self.lins.items():
+                if key in x_dict:
+                    out_dict[key] = lin(x_dict[key])
         return out_dict
 
+    @paddle.no_grad()
     def initialize_parameters(self, module, input):
         for key, x in input[0].items():
             lin = self.lins[key]
