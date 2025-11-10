@@ -1,8 +1,10 @@
 import math
 from typing import Callable, Optional
+
 import paddle
-from paddle import Tensor
 import paddle.nn.functional as F
+from paddle import Tensor
+
 
 def _orthogonal_matrix(dim: int) -> Tensor:
     r"""Get an orthogonal matrix by applying QR decomposition."""
@@ -12,7 +14,7 @@ def _orthogonal_matrix(dim: int) -> Tensor:
 
 
 def orthogonal_matrix(num_rows: int, num_cols: int) -> paddle.Tensor:
-    """Generate an orthogonal matrix with `num_rows` rows
+    r"""Generate an orthogonal matrix with `num_rows` rows
     and `num_cols` columns.
     """
     num_full_blocks = int(num_rows / num_cols)
@@ -27,15 +29,16 @@ def orthogonal_matrix(num_rows: int, num_cols: int) -> paddle.Tensor:
     mat = paddle.concat(x=blocks)
     return mat
 
+
 def dim2perm(ndim, dim0, dim1):
     perm = list(range(ndim))
     perm[dim0], perm[dim1] = perm[dim1], perm[dim0]
     return perm
 
-def linear_attention(
-    q: paddle.Tensor, k: paddle.Tensor, v: paddle.Tensor
-) -> paddle.Tensor:
-    """Efficient attention mechanism from the
+
+def linear_attention(q: paddle.Tensor, k: paddle.Tensor,
+                     v: paddle.Tensor) -> paddle.Tensor:
+    r"""Efficient attention mechanism from the
     `"Rethinking Attention with Performers"
     <https://arxiv.org/abs/2009.14794>`_ paper.
 
@@ -64,9 +67,10 @@ def generalized_kernel(
 
 
 class PerformerProjection(paddle.nn.Layer):
-    r"""The fast attention that uses a projection matrix from the `"Rethinking Attention with Performers" <https://arxiv.org/abs/2009.14794>`_ paper.
+    r"""The fast attention that uses a projection matrix from the `"Rethinking
+    Attention with Performers" <https://arxiv.org/abs/2009.14794>`_ paper.
     """
-    def __init__(self, num_cols: int, kernel: Callable = F.relu):
+    def __init__(self, num_cols: int, kernel: Callable = paddle.nn.ReLU()):
         super().__init__()
         num_rows = int(num_cols * math.log(num_cols))
         self.num_rows = num_rows
@@ -82,9 +86,10 @@ class PerformerProjection(paddle.nn.Layer):
         out = linear_attention(q, k, v)
         return out
 
+
 # @finshed
 class PerformerAttention(paddle.nn.Layer):
-    """The linear scaled attention mechanism from the
+    r"""The linear scaled attention mechanism from the
     `"Rethinking Attention with Performers"
     <https://arxiv.org/abs/2009.14794>`_ paper.
 
@@ -109,7 +114,7 @@ class PerformerAttention(paddle.nn.Layer):
         channels: int,
         heads: int,
         head_channels: int = 64,
-        kernel: Callable = F.relu,
+        kernel: Callable = paddle.nn.ReLU(),
         qkv_bias: bool = False,
         attn_out_bias: bool = True,
         dropout: float = 0.0,
@@ -128,13 +133,13 @@ class PerformerAttention(paddle.nn.Layer):
         self.q = paddle.nn.Linear(channels, inner_channels, bias_attr=qkv_bias)
         self.k = paddle.nn.Linear(channels, inner_channels, bias_attr=qkv_bias)
         self.v = paddle.nn.Linear(channels, inner_channels, bias_attr=qkv_bias)
-        self.attn_out = paddle.nn.Linear(inner_channels, channels, bias_attr=attn_out_bias)
+        self.attn_out = paddle.nn.Linear(inner_channels, channels,
+                                         bias_attr=attn_out_bias)
         self.dropout = paddle.nn.Dropout(dropout)
 
-    def forward(
-        self, x: paddle.Tensor, mask: Optional[paddle.Tensor] = None
-    ) -> paddle.Tensor:
-        """Forward pass.
+    def forward(self, x: paddle.Tensor,
+                mask: Optional[paddle.Tensor] = None) -> paddle.Tensor:
+        r"""Forward pass.
 
         Args:
             x (torch.Tensor): Node feature tensor
@@ -148,9 +153,8 @@ class PerformerAttention(paddle.nn.Layer):
         B, N, *_ = tuple(x.shape)
         q, k, v = self.q(x), self.k(x), self.v(x)
         q, k, v = map(
-            lambda t: t.reshape(B, N, self.heads, self.head_channels).transpose(
-                perm=[0, 2, 1, 3]
-            ),
+            lambda t: t.reshape(B, N, self.heads, self.head_channels).
+            transpose(perm=[0, 2, 1, 3]),
             (q, k, v),
         )
         if mask is not None:
@@ -167,7 +171,8 @@ class PerformerAttention(paddle.nn.Layer):
         num_rows = self.fast_attn.num_rows
         num_cols = self.fast_attn.num_cols
         projection_matrix = orthogonal_matrix(num_rows, num_cols)
-        paddle.assign(projection_matrix, output=self.fast_attn.projection_matrix)
+        paddle.assign(projection_matrix,
+                      output=self.fast_attn.projection_matrix)
         del projection_matrix
 
     def _reset_parameters(self):
@@ -179,4 +184,4 @@ class PerformerAttention(paddle.nn.Layer):
         self.redraw_projection_matrix()
 
     def __repr__(self) -> str:
-        return f'{self.__class__.__name__}(heads={self.heads}, head_channels={self.head_channels}, kernel={self.kernel})'
+        return f'{self.__class__.__name__}(heads={self.heads}, head_channels={self.head_channels} kernel={self.kernel})'
