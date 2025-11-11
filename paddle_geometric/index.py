@@ -535,7 +535,7 @@ class Index(BaseTensorSubclass):
 
 
 @register_for("concat")(Index)
-def concat_index(x, axis=0, name=None):
+def concat_index(x, axis=0, name=None, **kwargs):
 
     data_list = [x_i.data for x_i in x]
     concat_paddle = paddle.concat(data_list, axis=axis)

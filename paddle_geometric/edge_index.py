@@ -1505,10 +1505,8 @@ def concat_edgeindex(x, axis=0, name=None):
 
 
 @register_for("flip")(EdgeIndex)
-def flip_edgeindex(
-    x: EdgeIndex,
-    axis: Union[List[int], Tuple[int, ...]],
-) -> EdgeIndex:
+def flip_edgeindex(x: EdgeIndex, axis: Union[List[int], Tuple[int, ...]],
+                   **kwargs) -> EdgeIndex:
 
     data = paddle.flip(x.data, axis=axis)
     out = EdgeIndex(data)
@@ -1572,10 +1570,8 @@ def narrow_edgeindex(input: EdgeIndex, dim: int, start,
 
 
 @register_for('unbind')(EdgeIndex)
-def unbind_edgeindex(
-    input: EdgeIndex,
-    axis=0,
-) -> Union[EdgeIndex, Tensor]:
+def unbind_edgeindex(input: EdgeIndex, axis=0,
+                     **kwargs) -> Union[EdgeIndex, Tensor]:
 
     if axis == 0 or axis == -2:
         row = input[0]

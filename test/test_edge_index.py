@@ -679,7 +679,8 @@ def test_to_dense(dtype, device, value_dtype):
     assert out.equal_all(y=paddle.to_tensor(data=expected, dtype=value_dtype,
                                             place=device)).item()
 
-    value = paddle.arange(start=1, end=5, dtype=value_dtype or "float32")
+    value = paddle.arange(start=1, end=5, dtype=value_dtype or "float32",
+                          device=device)
     out = adj.to_dense(value)
     assert isinstance(out, paddle.Tensor)
     assert tuple(out.shape) == (3, 3)
@@ -688,7 +689,8 @@ def test_to_dense(dtype, device, value_dtype):
     assert out.equal_all(y=paddle.to_tensor(data=expected, dtype=value_dtype,
                                             place=device)).item()
 
-    value = paddle.arange(start=1, end=5, dtype=value_dtype or "float32")
+    value = paddle.arange(start=1, end=5, dtype=value_dtype or "float32",
+                          device=device)
     out = adj.to_dense(value.view(-1, 1))
     assert isinstance(out, paddle.Tensor)
     assert tuple(out.shape) == (3, 3, 1)

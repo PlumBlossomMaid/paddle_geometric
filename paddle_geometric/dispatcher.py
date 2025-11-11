@@ -199,46 +199,48 @@ paddle.mm = array_function_dispatch(_binary_dispatcher)(paddle.mm)
 
 
 @implements(paddle.concat)
-def concat(x, axis=0, name=None):
+def concat(x, axis=0, name=None, *, out=None):
     op_name = 'concat'
     set_registries(op_name)
     types = [type(x_) for x_ in x]
     for typ in types:
         if typ in REGISTRIES[op_name]:
             return REGISTRIES[op_name][typ](x, axis=axis, name=name)
-    return default_concat(x, axis=axis, name=name)
+    return default_concat(x, axis=axis, name=name, out=out)
 
 
 @implements(paddle.add)
-def add(x, y, **kwargs):
+def add(x, y, name=None, *, alpha=1, out=None):
     op_name = 'add'
     set_registries(op_name)
     types = [type(x), type(y)]
     for typ in types:
         if typ in REGISTRIES[op_name]:
-            return REGISTRIES[op_name][typ](x, y, **kwargs)
-    return x + y
+            return REGISTRIES[op_name][typ](x, y, name=name, alpha=alpha,
+                                            out=out)
+    return default_add(x, y, name=name, alpha=alpha, out=out)
 
 
 @implements(paddle.subtract)
-def subtract(x, y, **kwargs):
+def subtract(x, y, name=None, *, alpha=1, out=None):
     op_name = 'subtract'
     set_registries(op_name)
     types = [type(x), type(y)]
     for typ in types:
         if typ in REGISTRIES[op_name]:
-            return REGISTRIES[op_name][typ](x, y, **kwargs)
-    return x - y
+            return REGISTRIES[op_name][typ](x, y, name=name, alpha=alpha,
+                                            out=out)
+    return default_subtract(x, y, name=name, alpha=alpha, out=out)
 
 
 @implements(paddle.flip)
-def flip(x, axis, **kwargs):
+def flip(x, axis, name=None):
     op_name = 'flip'
     set_registries(op_name)
     typ = type(x)
     if typ in REGISTRIES[op_name]:
-        return REGISTRIES[op_name][typ](x, axis, **kwargs)
-    return default_flip(x, axis, **kwargs)
+        return REGISTRIES[op_name][typ](x, axis, name=name)
+    return default_flip(x, axis, name)
 
 
 @implements(paddle.index_select)
@@ -272,22 +274,25 @@ def unbind(input, axis=0):
 
 
 @implements(paddle.matmul)
-def matmul(x, y, **kwargs):
+def matmul(x, y, transpose_x=False, transpose_y=False, name=None, *, out=None):
     op_name = 'matmul'
     set_registries(op_name)
     types = [type(x), type(y)]
     for typ in types:
         if typ in REGISTRIES[op_name]:
-            return REGISTRIES[op_name][typ](x, y, **kwargs)
-    return default_matmul(x, y, **kwargs)
+            return REGISTRIES[op_name][typ](x, y, transpose_x=transpose_x,
+                                            transpose_y=transpose_y, name=name,
+                                            out=out)
+    return default_matmul(x, y, transpose_x=transpose_x,
+                          transpose_y=transpose_y, name=name, out=out)
 
 
 @implements(paddle.mm)
-def mm(x, y, **kwargs):
+def mm(input, mat2, name=None):
     op_name = 'mm'
     set_registries(op_name)
-    types = [type(x), type(y)]
+    types = [type(input), type(mat2)]
     for typ in types:
         if typ in REGISTRIES[op_name]:
-            return REGISTRIES[op_name][typ](x, y, **kwargs)
-    return default_mm(x, y, **kwargs)
+            return REGISTRIES[op_name][typ](input, mat2, name=name)
+    return default_mm(input, mat2, name=name)

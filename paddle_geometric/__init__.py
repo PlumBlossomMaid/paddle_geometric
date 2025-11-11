@@ -1,7 +1,4 @@
 import paddle  # noqa
-import paddle_sparse  # noqa
-from paddle_sparse import SparseStorage, SparseTensor  # noqa
-
 from .paddle_utils import *  # noqa
 
 import paddle_geometric.typing

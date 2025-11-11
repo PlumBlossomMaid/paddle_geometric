@@ -8,6 +8,7 @@ from paddle.nn import Layer
 from paddle_geometric.typing import OptTensor
 from paddle_geometric.utils import degree, scatter
 
+
 # @finshed
 class LayerNorm(Layer):
     r"""Applies layer normalization over each individual example in a batch
@@ -51,11 +52,9 @@ class LayerNorm(Layer):
 
         if affine:
             self.weight = paddle.base.framework.EagerParamBase.from_tensor(
-                tensor=paddle.empty(shape=in_channels)
-            )
+                tensor=paddle.empty(shape=in_channels))
             self.bias = paddle.base.framework.EagerParamBase.from_tensor(
-                tensor=paddle.empty(shape=in_channels)
-            )
+                tensor=paddle.empty(shape=in_channels))
         else:
             self.add_parameter(name="weight", parameter=None)
             self.add_parameter(name="bias", parameter=None)
@@ -89,7 +88,9 @@ class LayerNorm(Layer):
                     batch_size = int(batch.max()) + 1
 
                 norm = degree(batch, batch_size, dtype=x.dtype).clip_(min=1)
-                norm = norm.multiply_(y=paddle.to_tensor(x.shape[-1])).view([-1, 1])
+                norm = norm.multiply_(
+                    y=paddle.to_tensor(x.shape[-1], dtype=norm.dtype)).view(
+                        [-1, 1])
 
                 mean = scatter(x, batch, dim=0, dim_size=batch_size,
                                reduce='sum').sum(axis=-1, keepdim=True) / norm
@@ -116,6 +117,7 @@ class LayerNorm(Layer):
     def __repr__(self):
         return (f'{self.__class__.__name__}({self.in_channels}, '
                 f'affine={self.affine}, mode={self.mode})')
+
 
 # @finshed
 class HeteroLayerNorm(Layer):
@@ -155,11 +157,9 @@ class HeteroLayerNorm(Layer):
         self.affine = affine
         if affine:
             self.weight = paddle.base.framework.EagerParamBase.from_tensor(
-                tensor=paddle.empty(shape=[num_types, in_channels])
-            )
+                tensor=paddle.empty(shape=[num_types, in_channels]))
             self.bias = paddle.base.framework.EagerParamBase.from_tensor(
-                tensor=paddle.empty(shape=[num_types, in_channels])
-            )
+                tensor=paddle.empty(shape=[num_types, in_channels]))
         else:
             self.add_parameter(name="weight", parameter=None)
             self.add_parameter(name="bias", parameter=None)
